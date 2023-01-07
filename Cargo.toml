@@ -12,3 +12,5 @@ sqlx = { version = "0.6", features = ["runtime-tokio-native-tls", "json", "sqlit
 serde = "1.0.152"
 anyhow = "1.0.68"
 url = "2.3.1"
+env_logger = "0.10.0"
+log = "0.4.17"

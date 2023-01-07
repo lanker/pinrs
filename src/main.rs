@@ -7,6 +7,7 @@ use axum::{
     routing::get,
     Router,
 };
+use log::error;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::borrow::Cow;
@@ -57,18 +58,22 @@ async fn auth<B>(
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned("".to_owned()));
 
-    let users = sqlx::query_as::<_, User>(sql)
+    match sqlx::query_as::<_, User>(sql)
         .bind(token.as_ref())
         .fetch_all(&state.pool)
         .await
-        .unwrap();
-
-    match users.len() {
-        1 => {
-            req.extensions_mut().insert(users[0].id);
-            Ok(next.run(req).await)
+    {
+        Ok(users) => match users.len() {
+            1 => {
+                req.extensions_mut().insert(users[0].id);
+                Ok(next.run(req).await)
+            }
+            _ => Err(StatusCode::UNAUTHORIZED),
+        },
+        Err(err) => {
+            error!("Failed to authenticate: {}", err);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
-        _ => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
@@ -76,37 +81,47 @@ async fn add_entry(
     Query(params): Query<Post>,
     Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
-) -> Result<(), ()> {
+) -> Result<(), StatusCode> {
     let sql = "INSERT INTO posts (user_id, url, description) VALUES ($1, $2, $3)".to_string();
 
-    let _ = sqlx::query(&sql)
+    match sqlx::query(&sql)
         .bind(user_id)
         .bind(params.url)
         .bind(params.description)
         .execute(&state.pool)
         .await
-        .unwrap();
-
-    Ok(())
+    {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            error!("Failed to add post: {}", err);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 async fn get_entries(
     Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<Post>>, ()> {
+) -> Result<Json<Vec<Post>>, StatusCode> {
     let sql = "SELECT * FROM posts WHERE user_id = $1";
 
-    let posts = sqlx::query_as::<_, Post>(sql)
+    match sqlx::query_as::<_, Post>(sql)
         .bind(user_id)
         .fetch_all(&state.pool)
         .await
-        .unwrap();
-
-    Ok(Json(posts))
+    {
+        Ok(posts) => Ok(Json(posts)),
+        Err(err) => {
+            error!("Failed to get posts: {}", err);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    env_logger::init();
+
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect("sqlite://pinrs.db")

@@ -23,6 +23,12 @@ struct User {
 }
 
 #[derive(sqlx::FromRow, Deserialize, Serialize)]
+struct Tag {
+    id: u32,
+    name: String,
+}
+
+#[derive(sqlx::FromRow, Deserialize, Serialize)]
 struct Post {
     url: String,
     description: String,
@@ -78,7 +84,8 @@ async fn add_entry(
     Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
 ) -> Result<(), StatusCode> {
-    let sql = "INSERT INTO posts (user_id, url, description) VALUES ($1, $2, $3)".to_string();
+    let sql =
+        "INSERT INTO posts (user_id, url, description) VALUES ($1, $2, $3, $4)".to_string();
 
     match sqlx::query(&sql)
         .bind(user_id)

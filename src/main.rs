@@ -7,7 +7,7 @@ use axum::{
     routing::get,
     Router,
 };
-use log::error;
+use log::{error, info, debug};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::borrow::Cow;
@@ -23,10 +23,24 @@ struct User {
     token: String,
 }
 
+#[derive(Debug, sqlx::FromRow, Deserialize, Serialize)]
+struct Tag {
+    id: u32,
+    user_id: u32,
+    name: String,
+}
+
 #[derive(sqlx::FromRow, Deserialize, Serialize)]
 struct Post {
     url: String,
     description: String,
+}
+
+#[derive(sqlx::FromRow, Deserialize, Serialize)]
+struct PostRequest {
+    url: String,
+    description: String,
+    tags: Option<String>,
 }
 
 struct AppState {
@@ -77,26 +91,101 @@ async fn auth<B>(
     }
 }
 
-async fn posts_add(
-    Query(params): Query<Post>,
-    Extension(user_id): Extension<UserID>,
-    State(state): State<Arc<AppState>>,
-) -> Result<(), StatusCode> {
-    let sql = "INSERT INTO posts (user_id, url, description) VALUES ($1, $2, $3)".to_string();
-
-    match sqlx::query(&sql)
-        .bind(user_id)
-        .bind(params.url)
-        .bind(params.description)
+async fn add_tag_to_post(state: &AppState, post_id: u32, tag_id: u32) -> Result<(), StatusCode> {
+    match sqlx::query("INSERT INTO post_tag (post_id, tag_id) VALUES ($1, $2)")
+        .bind(post_id)
+        .bind(tag_id)
         .execute(&state.pool)
         .await
     {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            info!("inserted tag for post: {}, {}", post_id, tag_id);
+            Ok(())
+        }
         Err(err) => {
-            error!("Failed to add post: {}", err);
+            // probably the tag was already added to the post
+            error!(
+                "Failed to add tag to post: {} {} ({})",
+                post_id, tag_id, err
+            );
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+async fn posts_add(
+    Query(params): Query<PostRequest>,
+    Extension(user_id): Extension<UserID>,
+    State(state): State<Arc<AppState>>,
+) -> Result<(), StatusCode> {
+    // add post
+    let post =
+        match sqlx::query("INSERT INTO posts (user_id, url, description) VALUES ($1, $2, $3)")
+            .bind(user_id)
+            .bind(params.url)
+            .bind(params.description)
+            .execute(&state.pool)
+            .await
+        {
+            Ok(post) => Ok(post),
+            Err(err) => {
+                error!("Failed to add post: {}", err);
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        };
+
+    let post_id = post.unwrap().last_insert_rowid() as u32;
+
+    // check/add tags
+    let tags: Vec<String> = match params.tags {
+        Some(tags) => tags.split(' ').map(|s| s.to_owned()).collect(),
+        None => vec![],
+    };
+    for tag in tags {
+        let _ =
+            match sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE user_id = $1 AND name = $2")
+                .bind(user_id)
+                .bind(&tag)
+                .fetch_all(&state.pool)
+                .await
+            {
+                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+                Ok(tags_found) => match tags_found.len() {
+                    0 => {
+                        match sqlx::query("INSERT INTO tags (user_id, name) VALUES ($1, $2)")
+                            .bind(user_id)
+                            .bind(tag)
+                            .execute(&state.pool)
+                            .await
+                        {
+                            Ok(tag) => {
+                                debug!("inserted tag: {}", tag.last_insert_rowid());
+                                let _ = add_tag_to_post(
+                                    &state.clone(),
+                                    post_id,
+                                    tag.last_insert_rowid() as u32,
+                                )
+                                .await;
+                                Ok(())
+                            }
+                            Err(err) => {
+                                error!("Failed to add tag: {}", err);
+                                Err(StatusCode::INTERNAL_SERVER_ERROR)
+                            }
+                        }
+                    }
+                    1 => {
+                        let tag_id = tags_found[0].id;
+                        debug!("tags_found: {:?}", tags_found);
+                        let _ = add_tag_to_post(&state.clone(), post_id, tag_id).await;
+                        Ok(())
+                    }
+                    _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
+                },
+            };
+    }
+
+    Ok(())
 }
 
 async fn posts_all(

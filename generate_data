@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+sqlite3 pinrs.db <<SQL
+  INSERT INTO users VALUES (NULL, 'lanker', 'abc');
+  INSERT INTO posts (user_id, url, description) VALUES (1, 'https://www.pinboard.in/api/', 'Pinboard API Documentation (v1)');
+SQL

@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -51,8 +52,13 @@ async fn auth<B>(
         })
         .unwrap_or_else(HashMap::new);
 
+    let token = params
+        .get("token")
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned("".to_owned()));
+
     let users = sqlx::query_as::<_, User>(sql)
-        .bind(&params["token"])
+        .bind(token.as_ref())
         .fetch_all(&state.pool)
         .await
         .unwrap();

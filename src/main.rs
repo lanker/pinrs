@@ -77,7 +77,7 @@ async fn auth<B>(
     }
 }
 
-async fn add_entry(
+async fn posts_add(
     Query(params): Query<Post>,
     Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
@@ -99,7 +99,7 @@ async fn add_entry(
     }
 }
 
-async fn get_entries(
+async fn posts_all(
     Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Post>>, StatusCode> {
@@ -131,8 +131,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
-        .route("/v1/posts/add", get(add_entry))
-        .route("/v1/posts/all", get(get_entries))
+        .route("/v1/posts/add", get(posts_add))
+        .route("/v1/posts/all", get(posts_all))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state);
 

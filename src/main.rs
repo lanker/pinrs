@@ -207,6 +207,26 @@ async fn posts_all(
     }
 }
 
+async fn tags_get(
+    Extension(user_id): Extension<UserID>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<Tag>>, StatusCode> {
+    let sql = "SELECT * FROM tags WHERE user_id = $1";
+
+    match sqlx::query_as::<_, Tag>(sql)
+        .bind(user_id)
+        .fetch_all(&state.pool)
+        .await
+    {
+        // return number of times used
+        Ok(tags) => Ok(Json(tags)),
+        Err(err) => {
+            error!("Failed to get tags: {}", err);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
@@ -222,6 +242,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/", get(|| async { "Hello, World!" }))
         .route("/v1/posts/add", get(posts_add))
         .route("/v1/posts/all", get(posts_all))
+        .route("/v1/tags/get", get(tags_get))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state);
 

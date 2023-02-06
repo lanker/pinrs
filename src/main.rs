@@ -7,7 +7,7 @@ use axum::{
     routing::get,
     Router,
 };
-use log::{error, info, debug};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::borrow::Cow;
@@ -86,7 +86,8 @@ async fn auth<B>(
         },
         Err(err) => {
             error!("Failed to authenticate: {}", err);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            // Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(StatusCode::UNAUTHORIZED)
         }
     }
 }
@@ -227,6 +228,18 @@ async fn tags_get(
     }
 }
 
+fn app(pool: SqlitePool) -> Router {
+    let state = Arc::new(AppState { pool });
+
+    Router::new()
+        .route("/", get(|| async { "Hello, World!" }))
+        .route("/v1/posts/add", get(posts_add))
+        .route("/v1/posts/all", get(posts_all))
+        .route("/v1/tags/get", get(tags_get))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth))
+        .with_state(state)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
@@ -236,15 +249,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .connect("sqlite://pinrs.db")
         .await?;
 
-    let state = Arc::new(AppState { pool });
-
-    let app = Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
-        .route("/v1/posts/add", get(posts_add))
-        .route("/v1/posts/all", get(posts_all))
-        .route("/v1/tags/get", get(tags_get))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth))
-        .with_state(state);
+    let app = app(pool);
 
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
         .serve(app.into_make_service())
@@ -252,3 +257,94 @@ async fn main() -> Result<(), anyhow::Error> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt; // for `oneshot` and `ready`
+
+    #[tokio::test]
+    async fn auth_fail() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(3)
+            .connect("sqlite::memory:")
+            .await.unwrap();
+
+        let app = app(pool.clone());
+
+        let response = app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/tags/get?token=abc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_ok() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(3)
+            .connect("sqlite::memory:")
+            .await.unwrap();
+
+        let app = app(pool.clone());
+
+         let _ = sqlx::query("INSERT INTO users (username, token) VALUES ('yo', 'abc')")
+            .execute(&pool)
+            .await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/tags/get?token=abc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+    }
+}
+
+// use super::*;
+// use axum::{
+//     body::Body,
+//     http::{Request, StatusCode},
+// };
+// // use serde_json::{json, Value};
+// // use std::net::{SocketAddr, TcpListener};
+// // use tower::Service; // for `call`
+// use tower::ServiceExt; // for `oneshot` and `ready`
+
+// #[tokio::test]
+// async fn auth() {
+// let pool = SqlitePoolOptions::new()
+//     .max_connections(5)
+//     .connect("sqlite::memory:")
+//     .await;
+
+//     let app = app(pool.unwrap());
+
+//     // `Router` implements `tower::Service<Request<Body>>` so we can
+//     // call it like any tower service, no need to run an HTTP server.
+//     let response = app
+//         .oneshot(Request::builder().uri("/v1/tags/get").body(Body::empty()).unwrap())
+//         .await
+//         .unwrap();
+
+//     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+//     // let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+//     // assert_eq!(&body[..], b"Hello, World!");
+// }

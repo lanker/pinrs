@@ -357,13 +357,15 @@ mod tests {
 
         let url = get_random_string(5);
         let description = get_random_string(5);
+        let tag1 = get_random_string(5);
+        let tag2 = get_random_string(5);
         // insert a post
         let app = app(pool.clone()).await;
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v1/posts/add?token={token}&url={url}&description={description}"))
+                    .uri(format!("/v1/posts/add?token={token}&url={url}&description={description}&tags={tag1}%20{tag2}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -372,6 +374,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
+        // get posts
         let response = app
             .clone()
             .oneshot(
@@ -383,17 +386,27 @@ mod tests {
             .await
             .unwrap();
 
-
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
         let posts: Vec<Post> = serde_json::from_slice(&body).unwrap();
 
-        let mut found = false;
-        for post in posts {
-            if post.url == url && post.description == description {
-                found = true;
-                break;
-            }
-        }
-        assert!(found);
+        assert!(posts.iter().any(|post| post.url == url && post.description == description));
+
+        // get tags
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/tags/get?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let tags: Vec<Tag> = serde_json::from_slice(&body).unwrap();
+
+        assert!(tags.iter().any(|tag| tag.name == tag1));
+        assert!(tags.iter().any(|tag| tag.name == tag2));
     }
 }

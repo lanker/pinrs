@@ -7,7 +7,7 @@ use axum::{
     routing::get,
     Router,
 };
-use log::{error, info, debug};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::borrow::Cow;
@@ -86,7 +86,7 @@ async fn auth<B>(
         },
         Err(err) => {
             error!("Failed to authenticate: {}", err);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(StatusCode::UNAUTHORIZED)
         }
     }
 }
@@ -227,28 +227,107 @@ async fn tags_get(
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), anyhow::Error> {
-    env_logger::init();
-
+async fn setup_db(memory: bool) -> SqlitePool {
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect("sqlite://pinrs.db")
-        .await?;
+        .max_connections(3)
+        .connect(if memory {
+            "sqlite::memory:"
+        } else {
+            "sqlite://pinrs.db?mode=rwc"
+        })
+        .await
+        .unwrap();
 
+    let _ = sqlx::query(
+                "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username INTEGER NOT NULL UNIQUE, token TEXT NOT NULL);",
+            )
+            .execute(&pool)
+            .await;
+
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS posts ( id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, url TEXT NOT NULL UNIQUE, description TEXT NOT NULL, extended TEXT, time TEXT, shared TEXT, toread TEXT, hash TEXT, meta TEXT);"
+            )
+            .execute(&pool)
+            .await;
+
+    let _ = sqlx::query(
+  "CREATE TABLE IF NOT EXISTS post_tag ( post_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, UNIQUE(post_id, tag_id));"
+            )
+            .execute(&pool)
+            .await;
+
+    let _ = sqlx::query("CREATE TABLE IF NOT EXISTS tags ( id INTEGER PRIMARY KEY, user_id INTEGER, name INTEGER NOT NULL, UNIQUE(user_id, name));")
+            .execute(&pool)
+            .await;
+
+    pool
+}
+
+async fn app(pool: SqlitePool) -> Router {
     let state = Arc::new(AppState { pool });
 
-    let app = Router::new()
+    Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/v1/posts/add", get(posts_add))
         .route("/v1/posts/all", get(posts_all))
         .route("/v1/tags/get", get(tags_get))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
-        .with_state(state);
+        .with_state(state)
+}
 
+#[tokio::main]
+async fn main() -> Result<(), anyhow::Error> {
+    env_logger::init();
+    let pool = setup_db(false).await;
+    let app = app(pool);
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-        .serve(app.into_make_service())
+        .serve(app.await.into_make_service())
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt; // for `oneshot` and `ready`
+
+    #[tokio::test]
+    async fn auth() {
+        let pool = setup_db(true).await;
+        let _ = sqlx::query("INSERT INTO users (username, token) VALUES ('yo', 'abc')")
+            .execute(&pool)
+            .await;
+
+        let app = app(pool.clone()).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/tags/get?token=123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/tags/get?token=abc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

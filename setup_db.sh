@@ -19,7 +19,7 @@ sqlite3 pinrs.db <<SQL
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     username INTEGER NOT NULL UNIQUE,
-    token INTEGER NOT NULL
+    token TEXT NOT NULL
   );
 SQL
 

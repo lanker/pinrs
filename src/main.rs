@@ -296,12 +296,23 @@ mod tests {
     };
     use tower::ServiceExt; // for `oneshot` and `ready`
 
+    fn get_random_string(len: usize) -> String {
+        let chars = "abcdefghijklmnopqrstuvwxyz";
+        random_string::generate(len, chars)
+    }
+
     #[tokio::test]
     async fn auth() {
+        let username = get_random_string(5);
+        let token = get_random_string(5);
         let pool = setup_db(true).await;
-        let _ = sqlx::query("INSERT INTO users (username, token) VALUES ('yo', 'abc')")
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(&format!(
+            "INSERT INTO users (username, token) VALUES ('{}', '{}')",
+            username,
+            token
+        ))
+        .execute(&pool)
+        .await;
 
         let app = app(pool.clone()).await;
         let response = app
@@ -321,7 +332,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/v1/tags/get?token=abc")
+                    .uri(format!("/v1/tags/get?token={token}"))
                     .body(Body::empty())
                     .unwrap(),
             )

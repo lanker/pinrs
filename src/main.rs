@@ -30,7 +30,7 @@ struct Tag {
     name: String,
 }
 
-#[derive(sqlx::FromRow, Deserialize, Serialize)]
+#[derive(sqlx::FromRow, Debug, Deserialize, Serialize)]
 struct Post {
     url: String,
     description: String,
@@ -340,5 +340,60 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn add_post() {
+        let username = get_random_string(5);
+        let token = get_random_string(5);
+        let pool = setup_db(true).await;
+        let _ = sqlx::query(&format!(
+            "INSERT INTO users (username, token) VALUES ('{}', '{}')",
+            username,
+            token
+        ))
+        .execute(&pool)
+        .await;
+
+        let url = get_random_string(5);
+        let description = get_random_string(5);
+        // insert a post
+        let app = app(pool.clone()).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/posts/add?token={token}&url={url}&description={description}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/posts/all?token={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let posts: Vec<Post> = serde_json::from_slice(&body).unwrap();
+
+        let mut found = false;
+        for post in posts {
+            if post.url == url && post.description == description {
+                found = true;
+                break;
+            }
+        }
+        assert!(found);
     }
 }

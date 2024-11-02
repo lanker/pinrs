@@ -1,5 +1,5 @@
 use crate::{AppState, PostID, TagID, UserID};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::routing::post;
 use axum::{routing::get, Extension};
 use axum::{Json, Router};
@@ -36,7 +36,7 @@ pub(crate) struct BookmarkRequest {
     pub tag_names: Option<Vec<String>>,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Default)]
 pub(crate) struct BookmarkResponse {
     pub(crate) id: PostID,
     pub(crate) url: String,
@@ -81,6 +81,7 @@ pub fn configure(state: Arc<AppState>) -> Router {
         .route("/", get(handle_get_bookmarks))
         .route("/", post(handle_post_bookmarks))
         .route("/:id", get(handle_get_bookmark))
+        .route("/check", get(handle_check_bookmark))
         .with_state(state.clone())
 }
 
@@ -109,6 +110,46 @@ async fn get_bookmark(
             error!("Failed to get posts: {}", err);
             None
         }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Default)]
+struct ResponseCheck {
+    bookmark: BookmarkResponse,
+    metadata: Option<String>,
+    auto_tags: Vec<String>,
+}
+#[derive(Deserialize)]
+struct Url {
+    url: String,
+}
+async fn handle_check_bookmark(
+    Extension(user_id): Extension<UserID>,
+    State(state): State<Arc<AppState>>,
+    Query(url): Query<Url>,
+) -> Result<Json<ResponseCheck>, StatusCode> {
+    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) WHERE posts.user_id = $1 AND posts.url = $2 GROUP BY posts.id";
+
+    match sqlx::query_as::<_, BookmarkDb>(sql)
+        .bind(user_id)
+        .bind(url.url)
+        .fetch_optional(&state.pool)
+        .await
+    {
+        Ok(row) => match row {
+            Some(row) => {
+                let post: BookmarkResponse = row.into();
+                let response = ResponseCheck {
+                    bookmark: post,
+                    metadata: None,
+                    auto_tags: vec![],
+                };
+                Ok(Json(response))
+            }
+            None => Err(StatusCode::NOT_FOUND),
+        },
+
+        Err(_err) => Err(StatusCode::NOT_FOUND),
     }
 }
 
@@ -277,8 +318,10 @@ mod tests {
     use axum::{
         body::Body,
         http::{Request, StatusCode},
+        response::Response,
     };
     use hyper::header;
+    use sqlx::{Pool, Sqlite};
     use tower::ServiceExt; // for `oneshot` and `ready`
 
     fn get_random_string(len: usize) -> String {
@@ -286,16 +329,18 @@ mod tests {
         random_string::generate(len, chars)
     }
 
-    #[tokio::test]
-    async fn add_post() {
+    struct CreatedBookmark {
+        bookmark: BookmarkRequest,
+        response: Response,
+    }
+
+    async fn add_post(app: Router, pool: &Pool<Sqlite>, token: String) -> CreatedBookmark {
         let username = get_random_string(5);
-        let token = get_random_string(5);
-        let pool = setup_db(true).await;
         let _ = sqlx::query(&format!(
             "INSERT INTO users (username, token) VALUES ('{}', '{}')",
             username, token
         ))
-        .execute(&pool)
+        .execute(pool)
         .await;
 
         let url = get_random_string(5);
@@ -315,7 +360,6 @@ mod tests {
         let bookmark = serde_json::to_string(&bookmark_req).unwrap();
         //let bookmark = Json(&BookmarkRequest{url: url.to_owned(), title: title.to_owned(), description: None, notes: None, unread: Some(false), tag_names: None });
         // insert a post
-        let app = app(pool.clone()).await;
         let response = app
             .clone()
             .oneshot(
@@ -332,6 +376,23 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+
+        CreatedBookmark {
+            bookmark: bookmark_req,
+            response,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_post() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone()).await;
+        let token = get_random_string(5);
+
+        let CreatedBookmark {
+            bookmark,
+            response: _response,
+        } = add_post(app.clone(), &pool, token.clone()).await;
 
         // get posts
         let response = app
@@ -353,7 +414,10 @@ mod tests {
         let body_str = String::from_utf8(body.to_vec()).unwrap();
         let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
 
-        let post = posts.results.iter().find(|post| post.url == url && post.title == title);
+        let post = posts
+            .results
+            .iter()
+            .find(|post| post.url == bookmark.url && post.title == bookmark.title);
 
         assert!(post.is_some());
 
@@ -403,5 +467,56 @@ mod tests {
         //
         //assert!(tags.iter().any(|tag| tag.name == tag1));
         //assert!(tags.iter().any(|tag| tag.name == tag2));
+    }
+
+    #[tokio::test]
+    async fn test_check_post() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone()).await;
+        let token = get_random_string(5);
+
+        let CreatedBookmark {
+            bookmark,
+            response: _response,
+        } = add_post(app.clone(), &pool, token.clone()).await;
+
+        // get existing post
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks/check?url={}", bookmark.url))
+                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status() == StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let res: ResponseCheck = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(bookmark.url == res.bookmark.url && bookmark.title == res.bookmark.title);
+
+
+        // get non-existing post
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks/check?url={}", get_random_string(5)))
+                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status() == StatusCode::NOT_FOUND);
     }
 }

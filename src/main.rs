@@ -1,20 +1,25 @@
 use axum::{
-    extract::{Extension, Query, State},
-    http::{Request, StatusCode},
+    extract::{Request, State},
+    http::StatusCode,
     middleware::{self, Next},
-    response::Json,
     response::Response,
-    routing::get,
-    Router,
+    Router, ServiceExt,
 };
-use log::{debug, error, info};
+use hyper::header::{self};
+use log::error;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use std::borrow::Cow;
-use std::collections::HashMap;
 use std::sync::Arc;
+use tower::Layer;
+use tower_http::cors::CorsLayer;
+
+use tower_http::normalize_path::NormalizePathLayer;
+
+pub mod api;
 
 type UserID = u32;
+type PostID = u32;
+type TagID = PostID;
 
 #[derive(sqlx::FromRow, Deserialize, Serialize)]
 struct User {
@@ -23,54 +28,26 @@ struct User {
     token: String,
 }
 
-#[derive(Debug, sqlx::FromRow, Deserialize, Serialize)]
-struct Tag {
-    id: u32,
-    user_id: u32,
-    name: String,
-}
-
-#[derive(sqlx::FromRow, Debug, Deserialize, Serialize)]
-struct Post {
-    url: String,
-    description: String,
-}
-
-#[derive(sqlx::FromRow, Deserialize, Serialize)]
-struct PostRequest {
-    url: String,
-    description: String,
-    tags: Option<String>,
-}
-
-struct AppState {
+pub struct AppState {
     pool: SqlitePool,
 }
 
-#[derive(Clone)]
-struct UserId(&'static str);
-
-async fn auth<B>(
+async fn auth(
     State(state): State<Arc<AppState>>,
-    mut req: Request<B>,
-    next: Next<B>,
+    mut req: Request,
+    next: Next,
 ) -> Result<Response, StatusCode> {
     let sql = "SELECT * FROM users WHERE token = $1";
 
-    let params: HashMap<String, String> = req
-        .uri()
-        .query()
-        .map(|v| {
-            url::form_urlencoded::parse(v.as_bytes())
-                .into_owned()
-                .collect()
-        })
-        .unwrap_or_else(HashMap::new);
-
-    let token = params
-        .get("token")
-        .map(Cow::Borrowed)
-        .unwrap_or_else(|| Cow::Owned("".to_owned()));
+    let token = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|auth_header| auth_header.to_str().ok())
+        .and_then(|auth_value| {
+            auth_value
+                .strip_prefix("Token ")
+                .map(|stripped| stripped.to_owned())
+        });
 
     match sqlx::query_as::<_, User>(sql)
         .bind(token.as_ref())
@@ -91,143 +68,7 @@ async fn auth<B>(
     }
 }
 
-async fn add_tag_to_post(state: &AppState, post_id: u32, tag_id: u32) -> Result<(), StatusCode> {
-    match sqlx::query("INSERT INTO post_tag (post_id, tag_id) VALUES ($1, $2)")
-        .bind(post_id)
-        .bind(tag_id)
-        .execute(&state.pool)
-        .await
-    {
-        Ok(_) => {
-            info!("inserted tag for post: {}, {}", post_id, tag_id);
-            Ok(())
-        }
-        Err(err) => {
-            // probably the tag was already added to the post
-            error!(
-                "Failed to add tag to post: {} {} ({})",
-                post_id, tag_id, err
-            );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-async fn posts_add(
-    Query(params): Query<PostRequest>,
-    Extension(user_id): Extension<UserID>,
-    State(state): State<Arc<AppState>>,
-) -> Result<(), StatusCode> {
-    // add post
-    let post =
-        match sqlx::query("INSERT INTO posts (user_id, url, description) VALUES ($1, $2, $3)")
-            .bind(user_id)
-            .bind(params.url)
-            .bind(params.description)
-            .execute(&state.pool)
-            .await
-        {
-            Ok(post) => Ok(post),
-            Err(err) => {
-                error!("Failed to add post: {}", err);
-                Err(StatusCode::INTERNAL_SERVER_ERROR)
-            }
-        };
-
-    let post_id = post.unwrap().last_insert_rowid() as u32;
-
-    // check/add tags
-    let tags: Vec<String> = match params.tags {
-        Some(tags) => tags.split(' ').map(|s| s.to_owned()).collect(),
-        None => vec![],
-    };
-    for tag in tags {
-        let _ =
-            match sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE user_id = $1 AND name = $2")
-                .bind(user_id)
-                .bind(&tag)
-                .fetch_all(&state.pool)
-                .await
-            {
-                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-                Ok(tags_found) => match tags_found.len() {
-                    0 => {
-                        match sqlx::query("INSERT INTO tags (user_id, name) VALUES ($1, $2)")
-                            .bind(user_id)
-                            .bind(tag)
-                            .execute(&state.pool)
-                            .await
-                        {
-                            Ok(tag) => {
-                                debug!("inserted tag: {}", tag.last_insert_rowid());
-                                let _ = add_tag_to_post(
-                                    &state.clone(),
-                                    post_id,
-                                    tag.last_insert_rowid() as u32,
-                                )
-                                .await;
-                                Ok(())
-                            }
-                            Err(err) => {
-                                error!("Failed to add tag: {}", err);
-                                Err(StatusCode::INTERNAL_SERVER_ERROR)
-                            }
-                        }
-                    }
-                    1 => {
-                        let tag_id = tags_found[0].id;
-                        debug!("tags_found: {:?}", tags_found);
-                        let _ = add_tag_to_post(&state.clone(), post_id, tag_id).await;
-                        Ok(())
-                    }
-                    _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
-                },
-            };
-    }
-
-    Ok(())
-}
-
-async fn posts_all(
-    Extension(user_id): Extension<UserID>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<Post>>, StatusCode> {
-    let sql = "SELECT * FROM posts WHERE user_id = $1";
-
-    match sqlx::query_as::<_, Post>(sql)
-        .bind(user_id)
-        .fetch_all(&state.pool)
-        .await
-    {
-        Ok(posts) => Ok(Json(posts)),
-        Err(err) => {
-            error!("Failed to get posts: {}", err);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-async fn tags_get(
-    Extension(user_id): Extension<UserID>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<Tag>>, StatusCode> {
-    let sql = "SELECT * FROM tags WHERE user_id = $1";
-
-    match sqlx::query_as::<_, Tag>(sql)
-        .bind(user_id)
-        .fetch_all(&state.pool)
-        .await
-    {
-        // return number of times used
-        Ok(tags) => Ok(Json(tags)),
-        Err(err) => {
-            error!("Failed to get tags: {}", err);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-async fn setup_db(memory: bool) -> SqlitePool {
+pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     let pool = SqlitePoolOptions::new()
         .max_connections(3)
         .connect(if memory {
@@ -245,13 +86,13 @@ async fn setup_db(memory: bool) -> SqlitePool {
             .await;
 
     let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS posts ( id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, url TEXT NOT NULL UNIQUE, description TEXT NOT NULL, extended TEXT, time TEXT, shared TEXT, toread TEXT, hash TEXT, meta TEXT);"
+        "CREATE TABLE IF NOT EXISTS posts ( id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, url TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT, notes TEXT, unread BOOLEAN, shared TEXT, toread TEXT, hash TEXT, meta TEXT);"
             )
             .execute(&pool)
             .await;
 
     let _ = sqlx::query(
-  "CREATE TABLE IF NOT EXISTS post_tag ( post_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, UNIQUE(post_id, tag_id));"
+        "CREATE TABLE IF NOT EXISTS post_tag ( post_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, UNIQUE(post_id, tag_id));"
             )
             .execute(&pool)
             .await;
@@ -263,26 +104,31 @@ async fn setup_db(memory: bool) -> SqlitePool {
     pool
 }
 
-async fn app(pool: SqlitePool) -> Router {
+pub(crate) async fn app(pool: SqlitePool) -> Router {
     let state = Arc::new(AppState { pool });
 
-    Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
-        .route("/v1/posts/add", get(posts_add))
-        .route("/v1/posts/all", get(posts_all))
-        .route("/v1/tags/get", get(tags_get))
+    let router = crate::api::configure(state.clone());
+
+    router
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
-        .with_state(state)
+        .layer(CorsLayer::permissive())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
     let pool = setup_db(false).await;
-    let app = app(pool);
-    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-        .serve(app.await.into_make_service())
-        .await?;
+    let app = app(pool).await;
+
+    let app = NormalizePathLayer::trim_trailing_slash().layer(app);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
+        .await
+        .unwrap();
+    //axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+    //    .serve(app.await.into_make_service())
+    //    .await?;
 
     Ok(())
 }
@@ -294,6 +140,7 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
+    use hyper::header;
     use tower::ServiceExt; // for `oneshot` and `ready`
 
     fn get_random_string(len: usize) -> String {
@@ -308,8 +155,7 @@ mod tests {
         let pool = setup_db(true).await;
         let _ = sqlx::query(&format!(
             "INSERT INTO users (username, token) VALUES ('{}', '{}')",
-            username,
-            token
+            username, token
         ))
         .execute(&pool)
         .await;
@@ -319,7 +165,8 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/v1/tags/get?token=123")
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Token 123"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -332,7 +179,8 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v1/tags/get?token={token}"))
+                    .uri(format!("/api/bookmarks"))
+                    .header(header::AUTHORIZATION, format!("Token {token}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -340,73 +188,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn add_post() {
-        let username = get_random_string(5);
-        let token = get_random_string(5);
-        let pool = setup_db(true).await;
-        let _ = sqlx::query(&format!(
-            "INSERT INTO users (username, token) VALUES ('{}', '{}')",
-            username,
-            token
-        ))
-        .execute(&pool)
-        .await;
-
-        let url = get_random_string(5);
-        let description = get_random_string(5);
-        let tag1 = get_random_string(5);
-        let tag2 = get_random_string(5);
-        // insert a post
-        let app = app(pool.clone()).await;
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/posts/add?token={token}&url={url}&description={description}&tags={tag1}%20{tag2}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // get posts
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/posts/all?token={token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let posts: Vec<Post> = serde_json::from_slice(&body).unwrap();
-
-        assert!(posts.iter().any(|post| post.url == url && post.description == description));
-
-        // get tags
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/tags/get?token={token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let tags: Vec<Tag> = serde_json::from_slice(&body).unwrap();
-
-        assert!(tags.iter().any(|tag| tag.name == tag1));
-        assert!(tags.iter().any(|tag| tag.name == tag2));
     }
 }

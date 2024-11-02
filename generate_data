@@ -2,5 +2,5 @@
 
 sqlite3 pinrs.db <<SQL
   INSERT INTO users VALUES (NULL, 'lanker', 'abc');
-  INSERT INTO posts (user_id, url, description) VALUES (1, 'https://www.pinboard.in/api/', 'Pinboard API Documentation (v1)');
+  INSERT INTO posts (user_id, url, title) VALUES (1, 'https://www.pinboard.in/api/', 'Pinboard API Documentation (v1)');
 SQL

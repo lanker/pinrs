@@ -80,7 +80,8 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     let _ = sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE
+                name TEXT NOT NULL UNIQUE,
+                date_added INTEGER
              );"#,
     )
     .execute(&pool)

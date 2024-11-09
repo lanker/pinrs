@@ -1,7 +1,8 @@
-use crate::{AppState, PostID, TagID };
+use crate::{AppState, PostID, TagID};
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
+use chrono::{TimeZone, Utc};
 use hyper::StatusCode;
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -9,15 +10,16 @@ use std::sync::Arc;
 
 #[derive(Debug, sqlx::FromRow, Deserialize, Serialize)]
 pub(crate) struct TagDb {
-    pub id: TagID,
-    pub name: String,
+    pub(crate) id: TagID,
+    pub(crate) name: String,
+    pub(crate) date_added: i64,
 }
 
 #[derive(sqlx::FromRow, Deserialize, Serialize, Debug, Default)]
 pub(crate) struct TagResponse {
     pub(crate) id: PostID,
     pub(crate) name: String,
-    //date_added: String, // date
+    pub(crate) date_added: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -26,6 +28,17 @@ pub(crate) struct TagsResponse {
     pub(crate) results: Vec<TagResponse>,
 }
 
+impl From<TagDb> for TagResponse {
+    fn from(val: TagDb) -> Self {
+        let added = Utc.timestamp_opt(val.date_added, 0).unwrap();
+
+        TagResponse {
+            id: val.id,
+            name: val.name,
+            date_added: added.to_rfc3339(),
+        }
+    }
+}
 pub fn configure(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(handle_get_tags))
@@ -37,10 +50,7 @@ async fn handle_get_tags(
 ) -> Result<Json<TagsResponse>, StatusCode> {
     let sql = "SELECT * FROM tags";
 
-    match sqlx::query_as::<_, TagResponse>(sql)
-        .fetch_all(&state.pool)
-        .await
-    {
+    match sqlx::query_as::<_, TagDb>(sql).fetch_all(&state.pool).await {
         Ok(rows) => {
             let mut tags = vec![];
             for row in rows {

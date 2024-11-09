@@ -241,7 +241,7 @@ async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<S
                 Err(_) => -1,
                 Ok(tags_found) => match tags_found.len() {
                     0 => {
-                        match sqlx::query("INSERT INTO tags (name) VALUES ($1)")
+                        match sqlx::query("INSERT INTO tags (name, date_added) VALUES ($1, unixepoch())")
                             .bind(tag)
                             .execute(&state.pool)
                             .await
@@ -384,7 +384,7 @@ async fn handle_post_bookmark(
             Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
             Ok(tags_found) => match tags_found.len() {
                 0 => {
-                    match sqlx::query("INSERT INTO tags (name) VALUES ($1)")
+                    match sqlx::query("INSERT INTO tags (name, date_added) VALUES ($1, unixepoch())")
                         .bind(tag)
                         .execute(&state.pool)
                         .await

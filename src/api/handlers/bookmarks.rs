@@ -160,12 +160,23 @@ async fn handle_check_bookmark(
     }
 }
 
+// bookmarks?q=#audio namen&unread=yes
+#[derive(Deserialize)]
+struct BookmarkQuery {
+    _q: Option<String>,
+    limit: Option<u32>,
+    _offset: Option<u32>,
+}
 async fn handle_get_bookmarks(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<BookmarkQuery>,
 ) -> Result<Json<BookmarksResponse>, StatusCode> {
-    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) GROUP BY posts.id";
+    let limit = query.limit.unwrap_or(100);
+
+    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) GROUP BY posts.id LIMIT $1";
 
     match sqlx::query_as::<_, BookmarkDb>(sql)
+        .bind(limit)
         .fetch_all(&state.pool)
         .await
     {
@@ -712,5 +723,58 @@ mod tests {
             .results
             .iter()
             .any(|tag: &TagResponse| tag.name == new_tag));
+    }
+
+    #[tokio::test]
+    async fn test_get_post_limit() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone()).await;
+
+        add_post(app.clone()).await;
+        add_post(app.clone()).await;
+
+        // get posts
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    //.uri(format!("/api/bookmarks"))
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 2);
+
+        // get posts with limit
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    //.uri(format!("/api/bookmarks"))
+                    .uri("/api/bookmarks?limit=1")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 1);
     }
 }

@@ -17,8 +17,8 @@ use tower_http::normalize_path::NormalizePathLayer;
 
 pub mod api;
 
-type UserID = u32;
-type PostID = u32;
+type UserID = i64;
+type PostID = UserID;
 type TagID = PostID;
 
 #[derive(sqlx::FromRow, Deserialize, Serialize)]

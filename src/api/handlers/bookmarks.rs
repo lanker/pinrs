@@ -1,19 +1,16 @@
 use crate::{AppState, PostID, TagID, UserID};
 use axum::extract::{Path, Query, State};
-use axum::routing::post;
+use axum::routing::{post, put};
 use axum::{routing::get, Extension};
 use axum::{Json, Router};
 use hyper::StatusCode;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
+use sqlx::sqlite::SqliteRow;
+use sqlx::Row;
 use std::sync::Arc;
 
-#[derive(Debug, sqlx::FromRow, Deserialize, Serialize)]
-pub(crate) struct Tag {
-    pub id: TagID,
-    pub user_id: UserID,
-    pub name: String,
-}
+use super::tags::TagDb;
 
 #[derive(sqlx::FromRow, Deserialize, Serialize, Debug)]
 pub(crate) struct BookmarkDb {
@@ -79,8 +76,9 @@ impl Into<BookmarkResponse> for BookmarkDb {
 pub fn configure(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(handle_get_bookmarks))
-        .route("/", post(handle_post_bookmarks))
+        .route("/", post(handle_post_bookmark))
         .route("/:id", get(handle_get_bookmark))
+        .route("/:id", put(handle_put_bookmark))
         .route("/check", get(handle_check_bookmark))
         .with_state(state.clone())
 }
@@ -195,7 +193,11 @@ async fn handle_get_bookmark(
     }
 }
 
-async fn add_tag_to_post(state: &AppState, post_id: u32, tag_id: u32) -> Result<(), StatusCode> {
+async fn add_tag_to_post(
+    state: &AppState,
+    post_id: PostID,
+    tag_id: TagID,
+) -> Result<(), StatusCode> {
     match sqlx::query("INSERT INTO post_tag (post_id, tag_id) VALUES ($1, $2)")
         .bind(post_id)
         .bind(tag_id)
@@ -213,6 +215,95 @@ async fn add_tag_to_post(state: &AppState, post_id: u32, tag_id: u32) -> Result<
                 post_id, tag_id, err
             );
             Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn update_tags_for_post(
+    state: &AppState,
+    user_id: UserID,
+    post_id: PostID,
+    new_tags: Vec<String>,
+) {
+    let mut old_tag_ids = sqlx::query("SELECT tag_id FROM post_tag WHERE post_id = $1")
+        .bind(post_id)
+        .map(|row: SqliteRow| row.get::<TagID, _>("tag_id"))
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+    for tag in new_tags {
+        let new_tag_id: TagID =
+            match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE user_id = $1 AND name = $2")
+                .bind(user_id)
+                .bind(&tag)
+                .fetch_all(&state.pool)
+                .await
+            {
+                Err(_) => -1,
+                Ok(tags_found) => match tags_found.len() {
+                    0 => {
+                        match sqlx::query("INSERT INTO tags (user_id, name) VALUES ($1, $2)")
+                            .bind(user_id)
+                            .bind(tag)
+                            .execute(&state.pool)
+                            .await
+                        {
+                            Ok(tag) => {
+                                debug!("inserted tag: {}", tag.last_insert_rowid());
+                                tag.last_insert_rowid()
+                            }
+                            Err(err) => {
+                                error!("Failed to add tag: {}", err);
+                                -1
+                            }
+                        }
+                    }
+                    1 => {
+                        debug!("tags_found: {:?}", tags_found);
+                        tags_found[0].id
+                    }
+                    _ => -1,
+                },
+            };
+
+        // if new tag doesn't exist among the old tags, we need to add it to post
+        if !old_tag_ids.contains(&new_tag_id) {
+            let _ = add_tag_to_post(state, post_id, new_tag_id).await;
+        } else {
+            // remove the tag from old_tag_ids
+            let index = old_tag_ids.iter().position(|x| *x == new_tag_id).unwrap();
+            old_tag_ids.remove(index);
+        }
+    }
+
+    // this should now contain all tags that should be removed from the post, and potential be
+    // removed altogether
+    if old_tag_ids.len() > 0 {
+        for tag in old_tag_ids {
+            // delete tag from post
+            let _ = sqlx::query("DELETE FROM post_tag WHERE tag_id = $1 AND post_id = $2")
+                .bind(tag)
+                .bind(post_id)
+                .execute(&state.pool)
+                .await;
+
+            // check if any other posts are using the tag
+            let row = sqlx::query_as::<_, TagDb>("SELECT * FROM post_tag WHERE tag_id = $1")
+                .bind(tag)
+                .bind(&tag)
+                .fetch_one(&state.pool)
+                .await;
+
+            if row.is_err() {
+                // if no post are using the tag, remove it from tags too
+                let _ = sqlx::query_as::<_, TagDb>("DELETE FROM tags WHERE user_id = $1 AND id = $2")
+                    .bind(user_id)
+                    .bind(tag)
+                    .bind(&tag)
+                    .fetch_one(&state.pool)
+                    .await;
+            }
         }
     }
 }
@@ -236,7 +327,46 @@ async fn add_tag_to_post(state: &AppState, post_id: u32, tag_id: u32) -> Result<
 //    }
 //}
 
-async fn handle_post_bookmarks(
+async fn handle_put_bookmark(
+    Extension(user_id): Extension<UserID>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<PostID>,
+    Json(payload): Json<BookmarkRequest>,
+) -> Result<Json<BookmarkResponse>, StatusCode> {
+    // add post
+    let _post = match sqlx::query(
+        "UPDATE posts SET (user_id, url, title, unread) = ($1, $2, $3, $4) WHERE posts.id = $5",
+    )
+    .bind(user_id)
+    .bind(payload.url)
+    .bind(payload.title)
+    .bind(payload.unread)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    {
+        Ok(post) => Ok(post),
+        Err(err) => {
+            error!("Failed to add bookmark: {}", err);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    };
+
+    update_tags_for_post(
+        &state.clone(),
+        user_id,
+        id,
+        payload.tag_names.unwrap_or_default(),
+    )
+    .await;
+
+    match get_bookmark(state, user_id, id).await {
+        Some(post) => Ok(Json(post)),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+async fn handle_post_bookmark(
     Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BookmarkRequest>,
@@ -263,7 +393,7 @@ async fn handle_post_bookmarks(
 
     for tag in payload.tag_names.unwrap_or_default() {
         let _ =
-            match sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE user_id = $1 AND name = $2")
+            match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE user_id = $1 AND name = $2")
                 .bind(user_id)
                 .bind(&tag)
                 .fetch_all(&state.pool)
@@ -283,7 +413,7 @@ async fn handle_post_bookmarks(
                                 let _ = add_tag_to_post(
                                     &state.clone(),
                                     post_id,
-                                    tag.last_insert_rowid() as u32,
+                                    tag.last_insert_rowid(),
                                 )
                                 .await;
                                 Ok(())
@@ -314,7 +444,7 @@ async fn handle_post_bookmarks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{api::handlers::bookmarks::BookmarkRequest, app, setup_db};
+    use crate::{api::handlers::{bookmarks::BookmarkRequest, tags::{TagResponse, TagsResponse}}, app, setup_db};
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -503,7 +633,6 @@ mod tests {
 
         assert!(bookmark.url == res.bookmark.url && bookmark.title == res.bookmark.title);
 
-
         // get non-existing post
         let response = app
             .clone()
@@ -518,5 +647,100 @@ mod tests {
             .unwrap();
 
         assert!(response.status() == StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_add_tags_to_post() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone()).await;
+        let token = get_random_string(5);
+
+        let CreatedBookmark {
+            bookmark,
+            response: _response,
+        } = add_post(app.clone(), &pool, token.clone()).await;
+
+        // get existing post
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks/check?url={}", bookmark.url))
+                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status() == StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let res: ResponseCheck = serde_json::from_str(body_str.as_str()).unwrap();
+
+        let expected_tag_names = bookmark.tag_names.unwrap();
+        assert!(res.bookmark.tag_names.contains(&expected_tag_names[0]));
+        assert!(res.bookmark.tag_names.contains(&expected_tag_names[1]));
+
+        // update tags for post
+        let new_tag = get_random_string(5);
+        let bookmark_req = BookmarkRequest {
+            url: bookmark.url,
+            title: bookmark.title,
+            description: None,
+            notes: None,
+            unread: Some(false),
+            tag_names: Some(vec![expected_tag_names[1].clone(), new_tag.clone()]),
+        };
+        let bookmark_json = serde_json::to_string(&bookmark_req).unwrap();
+        // update bookmark
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/bookmarks/{}", res.bookmark.id))
+                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
+                    .body(Body::from(bookmark_json))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let res: BookmarkResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(res.tag_names.contains(&expected_tag_names[1]));
+        assert!(res.tag_names.contains(&new_tag));
+
+        // check that GET /tags/ not returning the removed tag
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tags")
+                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status() == StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let res: TagsResponse  = serde_json::from_str(body_str.as_str()).unwrap();
+        assert!(!res.results.iter().any(|tag: &TagResponse| tag.name == expected_tag_names[0]));
+        assert!(res.results.iter().any(|tag: &TagResponse| tag.name == expected_tag_names[1]));
+        assert!(res.results.iter().any(|tag: &TagResponse| tag.name == new_tag));
     }
 }

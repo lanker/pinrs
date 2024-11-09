@@ -136,7 +136,13 @@ async fn handle_check_bookmark(
     State(state): State<Arc<AppState>>,
     Query(url): Query<Url>,
 ) -> Result<Json<ResponseCheck>, StatusCode> {
-    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) WHERE posts.url = $1 GROUP BY posts.id";
+    let sql = r#"
+            SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
+                FROM posts
+                LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
+                LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
+                WHERE posts.url = $1
+                GROUP BY posts.id"#;
 
     match sqlx::query_as::<_, BookmarkDb>(sql)
         .bind(url.url)
@@ -173,7 +179,14 @@ async fn handle_get_bookmarks(
 ) -> Result<Json<BookmarksResponse>, StatusCode> {
     let limit = query.limit.unwrap_or(100);
 
-    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) GROUP BY posts.id LIMIT $1";
+    let sql = r#"
+                SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
+                   FROM posts
+                   LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
+                   LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
+                   GROUP BY posts.id
+                   LIMIT $1
+               "#;
 
     match sqlx::query_as::<_, BookmarkDb>(sql)
         .bind(limit)
@@ -252,10 +265,12 @@ async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<S
                 Err(_) => -1,
                 Ok(tags_found) => match tags_found.len() {
                     0 => {
-                        match sqlx::query("INSERT INTO tags (name, date_added) VALUES ($1, unixepoch())")
-                            .bind(tag)
-                            .execute(&state.pool)
-                            .await
+                        match sqlx::query(
+                            "INSERT INTO tags (name, date_added) VALUES ($1, unixepoch())",
+                        )
+                        .bind(tag)
+                        .execute(&state.pool)
+                        .await
                         {
                             Ok(tag) => {
                                 debug!("inserted tag: {}", tag.last_insert_rowid());
@@ -341,7 +356,11 @@ async fn handle_put_bookmark(
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
     // add post
     let _post = match sqlx::query(
-        "UPDATE posts SET (url, title, unread, date_modified) = ($1, $2, $3, unixepoch()) WHERE posts.id = $4",
+        r#"
+            UPDATE posts
+                SET (url, title, unread, date_modified) = ($1, $2, $3, unixepoch())
+                WHERE posts.id = $4
+        "#,
     )
     .bind(payload.url)
     .bind(payload.title)
@@ -395,10 +414,12 @@ async fn handle_post_bookmark(
             Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
             Ok(tags_found) => match tags_found.len() {
                 0 => {
-                    match sqlx::query("INSERT INTO tags (name, date_added) VALUES ($1, unixepoch())")
-                        .bind(tag)
-                        .execute(&state.pool)
-                        .await
+                    match sqlx::query(
+                        "INSERT INTO tags (name, date_added) VALUES ($1, unixepoch())",
+                    )
+                    .bind(tag)
+                    .execute(&state.pool)
+                    .await
                     {
                         Ok(tag) => {
                             debug!("inserted tag: {}", tag.last_insert_rowid());

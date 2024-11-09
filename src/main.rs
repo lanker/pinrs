@@ -80,26 +80,38 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
         .unwrap();
 
     let _ = sqlx::query(
-                "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username INTEGER NOT NULL UNIQUE, token TEXT NOT NULL);",
-            )
-            .execute(&pool)
-            .await;
+        r#"CREATE TABLE IF NOT EXISTS posts (
+                id INTEGER PRIMARY KEY,
+                url TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                description TEXT,
+                notes TEXT,
+                unread BOOLEAN
+            );"#,
+    )
+    .execute(&pool)
+    .await;
 
     let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS posts ( id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, url TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT, notes TEXT, unread BOOLEAN, shared TEXT, toread TEXT, hash TEXT, meta TEXT);"
-            )
-            .execute(&pool)
-            .await;
+        r#"CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE
+             );"#,
+    )
+    .execute(&pool)
+    .await;
 
     let _ = sqlx::query(
-        "CREATE TABLE IF NOT EXISTS post_tag ( post_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, UNIQUE(post_id, tag_id));"
-            )
-            .execute(&pool)
-            .await;
-
-    let _ = sqlx::query("CREATE TABLE IF NOT EXISTS tags ( id INTEGER PRIMARY KEY, user_id INTEGER, name INTEGER NOT NULL, UNIQUE(user_id, name));")
-            .execute(&pool)
-            .await;
+        r#"CREATE TABLE IF NOT EXISTS post_tag (
+                post_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                UNIQUE(post_id, tag_id),
+                FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE,
+                FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            );"#,
+    )
+    .execute(&pool)
+    .await;
 
     pool
 }

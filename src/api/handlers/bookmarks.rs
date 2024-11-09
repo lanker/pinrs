@@ -3,6 +3,7 @@ use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::routing::{post, put};
 use axum::{Json, Router};
+use chrono::{TimeZone, Utc};
 use hyper::StatusCode;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,8 @@ pub(crate) struct BookmarkDb {
     notes: Option<String>,
     unread: Option<bool>,
     tag_names: Option<String>,
+    date_added: i64,
+    date_modified: i64,
 }
 
 #[derive(sqlx::FromRow, Deserialize, Serialize)]
@@ -42,6 +45,8 @@ pub(crate) struct BookmarkResponse {
     pub(crate) notes: Option<String>,
     pub(crate) unread: bool,
     pub(crate) tag_names: Vec<String>,
+    pub(crate) date_added: String,
+    pub(crate) date_modified: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -61,6 +66,10 @@ impl Into<BookmarkResponse> for BookmarkDb {
                 .map(String::from)
                 .collect();
         }
+
+        let added = Utc.timestamp_opt(self.date_added, 0).unwrap();
+        let modified = Utc.timestamp_opt(self.date_modified, 0).unwrap();
+
         BookmarkResponse {
             id: self.id,
             url: self.url,
@@ -69,6 +78,8 @@ impl Into<BookmarkResponse> for BookmarkDb {
             notes: self.notes,
             unread: self.unread.unwrap_or_default(),
             tag_names: tags,
+            date_added: added.to_rfc3339(),
+            date_modified: modified.to_rfc3339(),
         }
     }
 }
@@ -319,7 +330,7 @@ async fn handle_put_bookmark(
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
     // add post
     let _post = match sqlx::query(
-        "UPDATE posts SET (url, title, unread) = ($1, $2, $3) WHERE posts.id = $4",
+        "UPDATE posts SET (url, title, unread, date_modified) = ($1, $2, $3, unixepoch()) WHERE posts.id = $4",
     )
     .bind(payload.url)
     .bind(payload.title)
@@ -348,7 +359,7 @@ async fn handle_post_bookmark(
     Json(payload): Json<BookmarkRequest>,
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
     // add post
-    let post = match sqlx::query("INSERT INTO posts (url, title, unread) VALUES ($1, $2, $3)")
+    let post = match sqlx::query("INSERT INTO posts (url, title, unread, date_added, date_modified) VALUES ($1, $2, $3, unixepoch(), unixepoch())")
         .bind(payload.url)
         .bind(payload.title)
         .bind(payload.unread)
@@ -358,7 +369,7 @@ async fn handle_post_bookmark(
         Ok(post) => Ok(post),
         Err(err) => {
             error!("Failed to add bookmark: {}", err);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(StatusCode::BAD_REQUEST)
         }
     };
 
@@ -408,6 +419,9 @@ async fn handle_post_bookmark(
     }
 }
 
+/*********************************************************************/
+/******************************* TESTS *******************************/
+/*********************************************************************/
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +440,7 @@ mod tests {
     use hyper::header;
     use tower::ServiceExt; // for `oneshot` and `ready`
 
+    // TODO: get from command line args
     const TOKEN: &str = "abc";
 
     fn get_random_string(len: usize) -> String {
@@ -540,28 +555,6 @@ mod tests {
         let res: BookmarkResponse = serde_json::from_str(body_str.as_str()).unwrap();
 
         assert!(post.url == res.url && post.title == res.title);
-
-        //// get tags
-        //let response = app
-        //    .clone()
-        //    .oneshot(
-        //        Request::builder()
-        //            .uri(format!("/api/tags"))
-        //            .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
-        //            .body(Body::empty())
-        //            .unwrap(),
-        //    )
-        //    .await
-        //    .unwrap();
-        //
-        //let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        //    .await
-        //    .unwrap();
-        //let body_str = String::from_utf8(body.to_vec()).unwrap();
-        //let tags: Vec<Tag> = serde_json::from_str(&body_str.as_str()).unwrap();
-        //
-        //assert!(tags.iter().any(|tag| tag.name == tag1));
-        //assert!(tags.iter().any(|tag| tag.name == tag2));
     }
 
     #[tokio::test]
@@ -646,6 +639,7 @@ mod tests {
         let expected_tag_names = bookmark.tag_names.unwrap();
         assert!(res.bookmark.tag_names.contains(&expected_tag_names[0]));
         assert!(res.bookmark.tag_names.contains(&expected_tag_names[1]));
+        assert!(res.bookmark.date_added == res.bookmark.date_modified);
 
         // update tags for post
         let new_tag = get_random_string(5);
@@ -682,6 +676,10 @@ mod tests {
 
         assert!(res.tag_names.contains(&expected_tag_names[1]));
         assert!(res.tag_names.contains(&new_tag));
+        // Our time resolution is 1 sec, it takes less than that to run the test so these will most
+        // often be the same. Could add a sleep before updating the post, but that's a bit
+        // annoying.
+        //assert!(res.date_added != res.date_modified);
 
         // check that GET /tags/ not returning the removed tag
         let response = app

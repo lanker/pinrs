@@ -69,7 +69,9 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
                 title TEXT NOT NULL,
                 description TEXT,
                 notes TEXT,
-                unread BOOLEAN
+                unread BOOLEAN,
+                date_added INTEGER,
+                date_modified INTEGER
             );"#,
     )
     .execute(&pool)

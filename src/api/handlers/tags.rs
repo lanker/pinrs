@@ -1,6 +1,6 @@
-use crate::{AppState, PostID, TagID, UserID};
+use crate::{AppState, PostID, TagID };
 use axum::extract::State;
-use axum::{routing::get, Extension};
+use axum::routing::get;
 use axum::{Json, Router};
 use hyper::StatusCode;
 use log::error;
@@ -10,7 +10,6 @@ use std::sync::Arc;
 #[derive(Debug, sqlx::FromRow, Deserialize, Serialize)]
 pub(crate) struct TagDb {
     pub id: TagID,
-    pub user_id: UserID,
     pub name: String,
 }
 
@@ -34,13 +33,11 @@ pub fn configure(state: Arc<AppState>) -> Router {
 }
 
 async fn handle_get_tags(
-    Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<TagsResponse>, StatusCode> {
-    let sql = "SELECT * FROM tags WHERE user_id = $1";
+    let sql = "SELECT * FROM tags";
 
     match sqlx::query_as::<_, TagResponse>(sql)
-        .bind(user_id)
         .fetch_all(&state.pool)
         .await
     {

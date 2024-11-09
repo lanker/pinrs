@@ -1,7 +1,7 @@
-use crate::{AppState, PostID, TagID, UserID};
+use crate::{AppState, PostID, TagID};
 use axum::extract::{Path, Query, State};
+use axum::routing::get;
 use axum::routing::{post, put};
-use axum::{routing::get, Extension};
 use axum::{Json, Router};
 use hyper::StatusCode;
 use log::{debug, error, info};
@@ -83,15 +83,15 @@ pub fn configure(state: Arc<AppState>) -> Router {
         .with_state(state.clone())
 }
 
-async fn get_bookmark(
-    state: Arc<AppState>,
-    user_id: UserID,
-    id: PostID,
-) -> Option<BookmarkResponse> {
-    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) WHERE posts.user_id = $1 AND posts.id = $2 GROUP BY posts.id";
+async fn get_bookmark(state: Arc<AppState>, id: PostID) -> Option<BookmarkResponse> {
+    let sql = r#"SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
+                    FROM posts
+                    LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
+                    LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
+                    WHERE posts.id = $1
+                    GROUP BY posts.id"#;
 
     match sqlx::query_as::<_, BookmarkDb>(sql)
-        .bind(user_id)
         .bind(id)
         .fetch_optional(&state.pool)
         .await
@@ -122,14 +122,12 @@ struct Url {
     url: String,
 }
 async fn handle_check_bookmark(
-    Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
     Query(url): Query<Url>,
 ) -> Result<Json<ResponseCheck>, StatusCode> {
-    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) WHERE posts.user_id = $1 AND posts.url = $2 GROUP BY posts.id";
+    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) WHERE posts.url = $1 GROUP BY posts.id";
 
     match sqlx::query_as::<_, BookmarkDb>(sql)
-        .bind(user_id)
         .bind(url.url)
         .fetch_optional(&state.pool)
         .await
@@ -152,14 +150,11 @@ async fn handle_check_bookmark(
 }
 
 async fn handle_get_bookmarks(
-    Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<BookmarksResponse>, StatusCode> {
-    //let sql = "SELECT * FROM posts WHERE user_id = $1";
-    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) WHERE posts.user_id = $1 GROUP BY posts.id";
+    let sql = "SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names FROM posts LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id) LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id) GROUP BY posts.id";
 
     match sqlx::query_as::<_, BookmarkDb>(sql)
-        .bind(user_id)
         .fetch_all(&state.pool)
         .await
     {
@@ -174,7 +169,6 @@ async fn handle_get_bookmarks(
                 results: posts,
             }))
         }
-
         Err(err) => {
             error!("Failed to get posts: {}", err);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -183,11 +177,10 @@ async fn handle_get_bookmarks(
 }
 
 async fn handle_get_bookmark(
-    Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
     Path(id): Path<PostID>,
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
-    match get_bookmark(state, user_id, id).await {
+    match get_bookmark(state, id).await {
         Some(post) => Ok(Json(post)),
         None => Err(StatusCode::NOT_FOUND),
     }
@@ -219,12 +212,7 @@ async fn add_tag_to_post(
     }
 }
 
-async fn update_tags_for_post(
-    state: &AppState,
-    user_id: UserID,
-    post_id: PostID,
-    new_tags: Vec<String>,
-) {
+async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<String>) {
     let mut old_tag_ids = sqlx::query("SELECT tag_id FROM post_tag WHERE post_id = $1")
         .bind(post_id)
         .map(|row: SqliteRow| row.get::<TagID, _>("tag_id"))
@@ -234,8 +222,7 @@ async fn update_tags_for_post(
 
     for tag in new_tags {
         let new_tag_id: TagID =
-            match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE user_id = $1 AND name = $2")
-                .bind(user_id)
+            match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE name = $1")
                 .bind(&tag)
                 .fetch_all(&state.pool)
                 .await
@@ -243,8 +230,7 @@ async fn update_tags_for_post(
                 Err(_) => -1,
                 Ok(tags_found) => match tags_found.len() {
                     0 => {
-                        match sqlx::query("INSERT INTO tags (user_id, name) VALUES ($1, $2)")
-                            .bind(user_id)
+                        match sqlx::query("INSERT INTO tags (name) VALUES ($1)")
                             .bind(tag)
                             .execute(&state.pool)
                             .await
@@ -297,8 +283,7 @@ async fn update_tags_for_post(
 
             if row.is_err() {
                 // if no post are using the tag, remove it from tags too
-                let _ = sqlx::query_as::<_, TagDb>("DELETE FROM tags WHERE user_id = $1 AND id = $2")
-                    .bind(user_id)
+                let _ = sqlx::query_as::<_, TagDb>("DELETE FROM tags WHERE id = $1")
                     .bind(tag)
                     .bind(&tag)
                     .fetch_one(&state.pool)
@@ -328,16 +313,14 @@ async fn update_tags_for_post(
 //}
 
 async fn handle_put_bookmark(
-    Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
     Path(id): Path<PostID>,
     Json(payload): Json<BookmarkRequest>,
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
     // add post
     let _post = match sqlx::query(
-        "UPDATE posts SET (user_id, url, title, unread) = ($1, $2, $3, $4) WHERE posts.id = $5",
+        "UPDATE posts SET (url, title, unread) = ($1, $2, $3) WHERE posts.id = $4",
     )
-    .bind(user_id)
     .bind(payload.url)
     .bind(payload.title)
     .bind(payload.unread)
@@ -352,35 +335,25 @@ async fn handle_put_bookmark(
         }
     };
 
-    update_tags_for_post(
-        &state.clone(),
-        user_id,
-        id,
-        payload.tag_names.unwrap_or_default(),
-    )
-    .await;
+    update_tags_for_post(&state.clone(), id, payload.tag_names.unwrap_or_default()).await;
 
-    match get_bookmark(state, user_id, id).await {
+    match get_bookmark(state, id).await {
         Some(post) => Ok(Json(post)),
         None => Err(StatusCode::NOT_FOUND),
     }
 }
 
 async fn handle_post_bookmark(
-    Extension(user_id): Extension<UserID>,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BookmarkRequest>,
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
     // add post
-    let post = match sqlx::query(
-        "INSERT INTO posts (user_id, url, title, unread) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(user_id)
-    .bind(payload.url)
-    .bind(payload.title)
-    .bind(payload.unread)
-    .execute(&state.pool)
-    .await
+    let post = match sqlx::query("INSERT INTO posts (url, title, unread) VALUES ($1, $2, $3)")
+        .bind(payload.url)
+        .bind(payload.title)
+        .bind(payload.unread)
+        .execute(&state.pool)
+        .await
     {
         Ok(post) => Ok(post),
         Err(err) => {
@@ -392,50 +365,44 @@ async fn handle_post_bookmark(
     let post_id = post.unwrap().last_insert_rowid() as PostID;
 
     for tag in payload.tag_names.unwrap_or_default() {
-        let _ =
-            match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE user_id = $1 AND name = $2")
-                .bind(user_id)
-                .bind(&tag)
-                .fetch_all(&state.pool)
-                .await
-            {
-                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-                Ok(tags_found) => match tags_found.len() {
-                    0 => {
-                        match sqlx::query("INSERT INTO tags (user_id, name) VALUES ($1, $2)")
-                            .bind(user_id)
-                            .bind(tag)
-                            .execute(&state.pool)
-                            .await
-                        {
-                            Ok(tag) => {
-                                debug!("inserted tag: {}", tag.last_insert_rowid());
-                                let _ = add_tag_to_post(
-                                    &state.clone(),
-                                    post_id,
-                                    tag.last_insert_rowid(),
-                                )
-                                .await;
-                                Ok(())
-                            }
-                            Err(err) => {
-                                error!("Failed to add tag: {}", err);
-                                Err(StatusCode::INTERNAL_SERVER_ERROR)
-                            }
+        let _ = match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE name = $1")
+            .bind(&tag)
+            .fetch_all(&state.pool)
+            .await
+        {
+            Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            Ok(tags_found) => match tags_found.len() {
+                0 => {
+                    match sqlx::query("INSERT INTO tags (name) VALUES ($1)")
+                        .bind(tag)
+                        .execute(&state.pool)
+                        .await
+                    {
+                        Ok(tag) => {
+                            debug!("inserted tag: {}", tag.last_insert_rowid());
+                            let _ =
+                                add_tag_to_post(&state.clone(), post_id, tag.last_insert_rowid())
+                                    .await;
+                            Ok(())
+                        }
+                        Err(err) => {
+                            error!("Failed to add tag: {}", err);
+                            Err(StatusCode::INTERNAL_SERVER_ERROR)
                         }
                     }
-                    1 => {
-                        let tag_id = tags_found[0].id;
-                        debug!("tags_found: {:?}", tags_found);
-                        let _ = add_tag_to_post(&state.clone(), post_id, tag_id).await;
-                        Ok(())
-                    }
-                    _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
-                },
-            };
+                }
+                1 => {
+                    let tag_id = tags_found[0].id;
+                    debug!("tags_found: {:?}", tags_found);
+                    let _ = add_tag_to_post(&state.clone(), post_id, tag_id).await;
+                    Ok(())
+                }
+                _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            },
+        };
     }
 
-    match get_bookmark(state, user_id, post_id).await {
+    match get_bookmark(state, post_id).await {
         Some(post) => Ok(Json(post)),
         None => Err(StatusCode::NOT_FOUND),
     }
@@ -444,15 +411,22 @@ async fn handle_post_bookmark(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{api::handlers::{bookmarks::BookmarkRequest, tags::{TagResponse, TagsResponse}}, app, setup_db};
+    use crate::{
+        api::handlers::{
+            bookmarks::BookmarkRequest,
+            tags::{TagResponse, TagsResponse},
+        },
+        app, setup_db,
+    };
     use axum::{
         body::Body,
         http::{Request, StatusCode},
         response::Response,
     };
     use hyper::header;
-    use sqlx::{Pool, Sqlite};
     use tower::ServiceExt; // for `oneshot` and `ready`
+
+    const TOKEN: &str = "abc";
 
     fn get_random_string(len: usize) -> String {
         let chars = "abcdefghijklmnopqrstuvwxyz";
@@ -464,15 +438,7 @@ mod tests {
         response: Response,
     }
 
-    async fn add_post(app: Router, pool: &Pool<Sqlite>, token: String) -> CreatedBookmark {
-        let username = get_random_string(5);
-        let _ = sqlx::query(&format!(
-            "INSERT INTO users (username, token) VALUES ('{}', '{}')",
-            username, token
-        ))
-        .execute(pool)
-        .await;
-
+    async fn add_post(app: Router) -> CreatedBookmark {
         let url = get_random_string(5);
         let title = get_random_string(5);
         let tag1 = get_random_string(5);
@@ -496,7 +462,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/api/bookmarks")
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
                     //.body(Json(BookmarkRequest{url, title, description: None, notes: None, unread: Some(false), tag_names: None }))
                     .body(Body::from(bookmark))
@@ -517,12 +483,11 @@ mod tests {
     async fn test_add_post() {
         let pool = setup_db(true).await;
         let app = app(pool.clone()).await;
-        let token = get_random_string(5);
 
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone(), &pool, token.clone()).await;
+        } = add_post(app.clone()).await;
 
         // get posts
         let response = app
@@ -531,7 +496,7 @@ mod tests {
                 Request::builder()
                     //.uri(format!("/api/bookmarks"))
                     .uri("/api/bookmarks")
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -559,7 +524,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks/{}", post.id))
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -582,7 +547,7 @@ mod tests {
         //    .oneshot(
         //        Request::builder()
         //            .uri(format!("/api/tags"))
-        //            .header(header::AUTHORIZATION, format!("Token {token}"))
+        //            .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
         //            .body(Body::empty())
         //            .unwrap(),
         //    )
@@ -603,12 +568,11 @@ mod tests {
     async fn test_check_post() {
         let pool = setup_db(true).await;
         let app = app(pool.clone()).await;
-        let token = get_random_string(5);
 
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone(), &pool, token.clone()).await;
+        } = add_post(app.clone()).await;
 
         // get existing post
         let response = app
@@ -616,7 +580,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks/check?url={}", bookmark.url))
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -639,7 +603,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks/check?url={}", get_random_string(5)))
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -653,12 +617,11 @@ mod tests {
     async fn test_add_tags_to_post() {
         let pool = setup_db(true).await;
         let app = app(pool.clone()).await;
-        let token = get_random_string(5);
 
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone(), &pool, token.clone()).await;
+        } = add_post(app.clone()).await;
 
         // get existing post
         let response = app
@@ -666,7 +629,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks/check?url={}", bookmark.url))
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -702,7 +665,7 @@ mod tests {
                 Request::builder()
                     .method("PUT")
                     .uri(format!("/api/bookmarks/{}", res.bookmark.id))
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
                     .body(Body::from(bookmark_json))
                     .unwrap(),
@@ -726,7 +689,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/api/tags")
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -738,9 +701,18 @@ mod tests {
             .await
             .unwrap();
         let body_str = String::from_utf8(body.to_vec()).unwrap();
-        let res: TagsResponse  = serde_json::from_str(body_str.as_str()).unwrap();
-        assert!(!res.results.iter().any(|tag: &TagResponse| tag.name == expected_tag_names[0]));
-        assert!(res.results.iter().any(|tag: &TagResponse| tag.name == expected_tag_names[1]));
-        assert!(res.results.iter().any(|tag: &TagResponse| tag.name == new_tag));
+        let res: TagsResponse = serde_json::from_str(body_str.as_str()).unwrap();
+        assert!(!res
+            .results
+            .iter()
+            .any(|tag: &TagResponse| tag.name == expected_tag_names[0]));
+        assert!(res
+            .results
+            .iter()
+            .any(|tag: &TagResponse| tag.name == expected_tag_names[1]));
+        assert!(res
+            .results
+            .iter()
+            .any(|tag: &TagResponse| tag.name == new_tag));
     }
 }

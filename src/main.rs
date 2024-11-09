@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Request, State},
+    extract::Request,
     http::StatusCode,
     middleware::{self, Next},
     response::Response,
@@ -7,7 +7,6 @@ use axum::{
 };
 use hyper::header::{self};
 use log::error;
-use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::sync::Arc;
 use tower::Layer;
@@ -17,28 +16,20 @@ use tower_http::normalize_path::NormalizePathLayer;
 
 pub mod api;
 
-type UserID = i64;
-type PostID = UserID;
+type PostID = i64;
 type TagID = PostID;
-
-#[derive(sqlx::FromRow, Deserialize, Serialize)]
-struct User {
-    id: UserID,
-    username: String,
-    token: String,
-}
 
 pub struct AppState {
     pool: SqlitePool,
 }
 
+// TODO: get from command line args
+pub const TOKEN: &str = "abc";
+
 async fn auth(
-    State(state): State<Arc<AppState>>,
-    mut req: Request,
+    req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let sql = "SELECT * FROM users WHERE token = $1";
-
     let token = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -49,22 +40,14 @@ async fn auth(
                 .map(|stripped| stripped.to_owned())
         });
 
-    match sqlx::query_as::<_, User>(sql)
-        .bind(token.as_ref())
-        .fetch_all(&state.pool)
-        .await
-    {
-        Ok(users) => match users.len() {
-            1 => {
-                req.extensions_mut().insert(users[0].id);
-                Ok(next.run(req).await)
-            }
-            _ => Err(StatusCode::UNAUTHORIZED),
-        },
-        Err(err) => {
-            error!("Failed to authenticate: {}", err);
-            Err(StatusCode::UNAUTHORIZED)
-        }
+    if token == Some(TOKEN.to_owned()) {
+        Ok(next.run(req).await)
+    } else {
+        error!(
+            "Failed to authenticate with token: {}",
+            token.unwrap_or_default()
+        );
+        Err(StatusCode::UNAUTHORIZED)
     }
 }
 
@@ -155,24 +138,11 @@ mod tests {
     use hyper::header;
     use tower::ServiceExt; // for `oneshot` and `ready`
 
-    fn get_random_string(len: usize) -> String {
-        let chars = "abcdefghijklmnopqrstuvwxyz";
-        random_string::generate(len, chars)
-    }
-
     #[tokio::test]
     async fn auth() {
-        let username = get_random_string(5);
-        let token = get_random_string(5);
         let pool = setup_db(true).await;
-        let _ = sqlx::query(&format!(
-            "INSERT INTO users (username, token) VALUES ('{}', '{}')",
-            username, token
-        ))
-        .execute(&pool)
-        .await;
-
         let app = app(pool.clone()).await;
+
         let response = app
             .clone()
             .oneshot(
@@ -192,7 +162,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks"))
-                    .header(header::AUTHORIZATION, format!("Token {token}"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )

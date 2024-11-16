@@ -166,10 +166,37 @@ async fn handle_check_bookmark(
     }
 }
 
+#[derive(Default)]
+struct SearchQuery {
+    tag_names: Vec<String>,
+    _text: Vec<String>,
+}
+
+fn parse_search(query: String) -> SearchQuery {
+    let tokens = query.split_whitespace();
+
+    let mut tags = vec![];
+    let mut text = vec![];
+    for token in tokens {
+        if token.starts_with('#') {
+            let mut chars = token.chars();
+            chars.next();
+            tags.push(chars.as_str().to_owned());
+        } else {
+            text.push(token.to_owned());
+        }
+    }
+
+    SearchQuery {
+        tag_names: tags,
+        _text: text,
+    }
+}
+
 // bookmarks?q=#audio namen&unread=yes
 #[derive(Deserialize)]
 struct BookmarkQuery {
-    _q: Option<String>,
+    q: Option<String>,
     limit: Option<u32>,
     _offset: Option<u32>,
 }
@@ -179,16 +206,49 @@ async fn handle_get_bookmarks(
 ) -> Result<Json<BookmarksResponse>, StatusCode> {
     let limit = query.limit.unwrap_or(100);
 
-    let sql = r#"
+    let mut sql = r#"
                 SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
                    FROM posts
                    LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
                    LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
                    GROUP BY posts.id
                    LIMIT $1
-               "#;
+               "#
+    .to_owned();
 
-    match sqlx::query_as::<_, BookmarkDb>(sql)
+    let search_query: SearchQuery;
+    if query.q.is_some() {
+        search_query = parse_search(query.q.unwrap());
+        // can't bind array in sqlx
+        let tag_str = search_query
+            .tag_names
+            .into_iter()
+            .map(|tag| format!("name = '{}'", tag))
+            .collect::<Vec<String>>()
+            .join("OR");
+
+        sql = format!(
+            r#"
+            SELECT posts.*, group_concat(tags.name) as tag_names
+                FROM posts
+                LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
+                LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
+                WHERE posts.id IN (
+                    SELECT post_id
+                    FROM post_tag
+                    WHERE tag_id IN (
+                        SELECT id
+                        FROM tags
+                        WHERE {}
+                    )
+                )
+                GROUP BY posts.id
+            "#,
+            tag_str
+        );
+    }
+
+    match sqlx::query_as::<_, BookmarkDb>(sql.as_ref())
         .bind(limit)
         .fetch_all(&state.pool)
         .await
@@ -485,11 +545,17 @@ mod tests {
         response: Response,
     }
 
-    async fn add_post(app: Router) -> CreatedBookmark {
+    async fn add_post(app: Router, tags: Option<Vec<String>>) -> CreatedBookmark {
         let url = get_random_string(5);
         let title = get_random_string(5);
-        let tag1 = get_random_string(5);
-        let tag2 = get_random_string(5);
+        let tag_names = match tags {
+            Some(tags) => tags,
+            None => {
+                let tag1 = get_random_string(5);
+                let tag2 = get_random_string(5);
+                vec![tag1.clone(), tag2.clone()]
+            }
+        };
 
         // serde_json::from_value(BookmarkRequest{url, title, description: None, notes: None, unread: Some(false), tag_names: None }).unwrap())
         let bookmark_req = BookmarkRequest {
@@ -498,7 +564,7 @@ mod tests {
             description: None,
             notes: None,
             unread: Some(false),
-            tag_names: Some(vec![tag1.clone(), tag2.clone()]),
+            tag_names: Some(tag_names),
         };
         let bookmark = serde_json::to_string(&bookmark_req).unwrap();
         //let bookmark = Json(&BookmarkRequest{url: url.to_owned(), title: title.to_owned(), description: None, notes: None, unread: Some(false), tag_names: None });
@@ -534,7 +600,7 @@ mod tests {
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone()).await;
+        } = add_post(app.clone(), None).await;
 
         // get posts
         let response = app
@@ -597,7 +663,7 @@ mod tests {
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone()).await;
+        } = add_post(app.clone(), None).await;
 
         // get existing post
         let response = app
@@ -646,7 +712,7 @@ mod tests {
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone()).await;
+        } = add_post(app.clone(), None).await;
 
         // get existing post
         let response = app
@@ -751,8 +817,8 @@ mod tests {
         let pool = setup_db(true).await;
         let app = app(pool.clone()).await;
 
-        add_post(app.clone()).await;
-        add_post(app.clone()).await;
+        add_post(app.clone(), None).await;
+        add_post(app.clone(), None).await;
 
         // get posts
         let response = app
@@ -797,5 +863,62 @@ mod tests {
         let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
 
         assert!(posts.results.iter().count() == 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_bookmark_tag() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone()).await;
+
+        let tag1 = vec![get_random_string(5)];
+        let post1 = add_post(app.clone(), Some(tag1.clone())).await;
+        add_post(app.clone(), None).await;
+
+        // get posts
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    //.uri(format!("/api/bookmarks"))
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 2);
+
+        // get posts with query for tags
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks?q=%23{}", tag1[0]))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 1);
+
+        assert!(posts.results[0].tag_names.contains(&tag1[0]));
+        assert!(posts.results[0].url == post1.bookmark.url);
+        assert!(posts.results[0].title == post1.bookmark.title);
     }
 }

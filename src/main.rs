@@ -26,10 +26,7 @@ pub struct AppState {
 // TODO: get from command line args
 pub const TOKEN: &str = "abc";
 
-async fn auth(
-    req: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
+async fn auth(req: Request, next: Next) -> Result<Response, StatusCode> {
     let token = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -63,7 +60,8 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
         .unwrap();
 
     let _ = sqlx::query(
-        r#"CREATE TABLE IF NOT EXISTS posts (
+        r#"
+            CREATE TABLE IF NOT EXISTS posts (
                 id INTEGER PRIMARY KEY,
                 url TEXT NOT NULL UNIQUE,
                 title TEXT NOT NULL,
@@ -72,29 +70,34 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
                 unread BOOLEAN,
                 date_added INTEGER,
                 date_modified INTEGER
-            );"#,
+            );
+        "#,
     )
     .execute(&pool)
     .await;
 
     let _ = sqlx::query(
-        r#"CREATE TABLE IF NOT EXISTS tags (
+        r#"
+            CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 date_added INTEGER
-             );"#,
+             );
+        "#,
     )
     .execute(&pool)
     .await;
 
     let _ = sqlx::query(
-        r#"CREATE TABLE IF NOT EXISTS post_tag (
+        r#"
+            CREATE TABLE IF NOT EXISTS post_tag (
                 post_id INTEGER NOT NULL,
                 tag_id INTEGER NOT NULL,
                 UNIQUE(post_id, tag_id),
                 FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE,
                 FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
-            );"#,
+            );
+        "#,
     )
     .execute(&pool)
     .await;

@@ -102,6 +102,63 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     .execute(&pool)
     .await;
 
+    // ---------------------- FTS
+    let _ = sqlx::query(
+        r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
+                url,
+                title,
+                description,
+                notes,
+                unread UNINDEXED,
+                date_added UNINDEXED,
+                date_modified UNINDEXED,
+                content='posts',
+                content_rowid='id'
+            );
+        "#,
+    )
+    .execute(&pool)
+    .await;
+
+    let _ = sqlx::query(
+        r#"
+            CREATE TRIGGER IF NOT EXISTS posts_ai AFTER INSERT ON posts
+                BEGIN
+                    INSERT INTO posts_fts (rowid, url, title, description, notes)
+                    VALUES (new.id, new.url, new.title, new.description, new.notes);
+                END;
+    "#,
+    )
+    .execute(&pool)
+    .await;
+
+    let _ = sqlx::query(
+        r#"
+            CREATE TRIGGER IF NOT EXISTS posts_ad AFTER DELETE ON posts
+                BEGIN
+                    INSERT INTO posts_fts (posts_fts, rowid, url, title, description, notes)
+                    VALUES ('delete', old.id, old.url, old.title, old.description, old.notes);
+                END;
+    "#,
+    )
+    .execute(&pool)
+    .await;
+
+    let _ = sqlx::query(
+        r#"
+            CREATE TRIGGER IF NOT EXISTS posts_au AFTER UPDATE ON posts
+                BEGIN
+                    INSERT INTO posts_fts (posts_fts, rowid, url, title, description, notes)
+                    VALUES ('delete', old.id, old.url, old.title, old.description, old.notes);
+                    INSERT INTO posts_fts (rowid, url, title, description, notes)
+                    VALUES (new.id, new.url, new.title, new.description, new.notes);
+                END;
+    "#,
+    )
+    .execute(&pool)
+    .await;
+
     pool
 }
 

@@ -55,11 +55,11 @@ pub(crate) struct BookmarksResponse {
     pub(crate) results: Vec<BookmarkResponse>,
 }
 
-impl Into<BookmarkResponse> for BookmarkDb {
-    fn into(self) -> BookmarkResponse {
+impl From<BookmarkDb> for BookmarkResponse {
+    fn from(val: BookmarkDb) -> Self {
         let mut tags = vec![];
-        if self.tag_names.is_some() {
-            tags = self
+        if val.tag_names.is_some() {
+            tags = val
                 .tag_names
                 .unwrap()
                 .split(",")
@@ -67,16 +67,16 @@ impl Into<BookmarkResponse> for BookmarkDb {
                 .collect();
         }
 
-        let added = Utc.timestamp_opt(self.date_added, 0).unwrap();
-        let modified = Utc.timestamp_opt(self.date_modified, 0).unwrap();
+        let added = Utc.timestamp_opt(val.date_added, 0).unwrap();
+        let modified = Utc.timestamp_opt(val.date_modified, 0).unwrap();
 
         BookmarkResponse {
-            id: self.id,
-            url: self.url,
-            title: self.title,
-            description: self.description,
-            notes: self.notes,
-            unread: self.unread.unwrap_or_default(),
+            id: val.id,
+            url: val.url,
+            title: val.title,
+            description: val.description,
+            notes: val.notes,
+            unread: val.unread.unwrap_or_default(),
             tag_names: tags,
             date_added: added.to_rfc3339(),
             date_modified: modified.to_rfc3339(),

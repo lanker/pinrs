@@ -432,13 +432,15 @@ async fn handle_put_bookmark(
     let _post = match sqlx::query(
         r#"
             UPDATE posts
-                SET (url, title, unread, date_modified) = ($1, $2, $3, unixepoch())
-                WHERE posts.id = $4
+                SET (url, title, unread, description, notes, date_modified) = ($1, $2, $3, $4, $5, unixepoch())
+                WHERE posts.id = $6
         "#,
     )
     .bind(payload.url)
     .bind(payload.title)
-    .bind(payload.unread)
+    .bind(payload.unread.unwrap_or_default())
+    .bind(payload.description.unwrap_or_default())
+    .bind(payload.notes.unwrap_or_default())
     .bind(id)
     .execute(&state.pool)
     .await

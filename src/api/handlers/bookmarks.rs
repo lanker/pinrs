@@ -5,11 +5,11 @@ use axum::routing::{post, put};
 use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
 use hyper::StatusCode;
-use tracing::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 use std::sync::Arc;
+use tracing::{debug, error, info};
 
 use super::tags::TagDb;
 
@@ -219,7 +219,7 @@ async fn handle_get_bookmarks(
             .collect::<Vec<String>>()
             .join("OR");
 
-        if tag_str.len() > 0 {
+        if !tag_str.is_empty() {
             extra_sql.push(format!(
                 r#"
                     SELECT post_id
@@ -234,7 +234,7 @@ async fn handle_get_bookmarks(
             ));
         }
 
-        if search_query.text.len() > 0 {
+        if !search_query.text.is_empty() {
             extra_sql.push(format!(
                 r#"
                     SELECT rowid
@@ -376,7 +376,7 @@ async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<S
 
     // this should now contain all tags that should be removed from the post, and potential be
     // removed altogether
-    if old_tag_ids.len() > 0 {
+    if !old_tag_ids.is_empty() {
         for tag in old_tag_ids {
             // delete tag from post
             let _ = sqlx::query("DELETE FROM post_tag WHERE tag_id = $1 AND post_id = $2")
@@ -388,7 +388,6 @@ async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<S
             // check if any other posts are using the tag
             let row = sqlx::query_as::<_, TagDb>("SELECT * FROM post_tag WHERE tag_id = $1")
                 .bind(tag)
-                .bind(&tag)
                 .fetch_one(&state.pool)
                 .await;
 
@@ -396,32 +395,12 @@ async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<S
                 // if no post are using the tag, remove it from tags too
                 let _ = sqlx::query_as::<_, TagDb>("DELETE FROM tags WHERE id = $1")
                     .bind(tag)
-                    .bind(&tag)
                     .fetch_one(&state.pool)
                     .await;
             }
         }
     }
 }
-
-//async fn get_tags_for_post(state: &AppState, post_id: PostID) -> Vec<String> {
-//    let sql = "SELECT tags.name FROM tags,post_tag WHERE post_tag.post_id = $1";
-//
-//    match sqlx::query(sql)
-//        .bind(post_id.to_owned())
-//        .fetch_all(&state.pool)
-//        .await
-//    {
-//        Ok(rows) => {
-//            let mut v: Vec<String> = vec![];
-//            for row in rows {
-//                v.push(row.try_get(0).unwrap());
-//            }
-//            v
-//        }
-//        Err(_err) => vec![],
-//    }
-//}
 
 async fn handle_put_bookmark(
     State(state): State<Arc<AppState>>,

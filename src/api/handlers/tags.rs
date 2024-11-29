@@ -4,9 +4,9 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
 use hyper::StatusCode;
-use log::error;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::error;
 
 #[derive(Debug, sqlx::FromRow, Deserialize, Serialize)]
 pub(crate) struct TagDb {

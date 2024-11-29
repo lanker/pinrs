@@ -6,11 +6,12 @@ use axum::{
     Router, ServiceExt,
 };
 use hyper::header::{self};
-use log::error;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::sync::Arc;
 use tower::Layer;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
+use tracing::error;
 
 use tower_http::normalize_path::NormalizePathLayer;
 
@@ -169,6 +170,7 @@ pub(crate) async fn app(pool: SqlitePool) -> Router {
 
     router
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
+        .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
 }
 
@@ -181,6 +183,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let app = NormalizePathLayer::trim_trailing_slash().layer(app);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    tracing::debug!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
         .await
         .unwrap();

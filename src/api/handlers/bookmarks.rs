@@ -5,7 +5,7 @@ use axum::routing::{post, put};
 use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
 use hyper::StatusCode;
-use log::{debug, error, info};
+use tracing::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;

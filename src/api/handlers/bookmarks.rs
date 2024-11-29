@@ -14,7 +14,7 @@ use tracing::{debug, error, info};
 use super::tags::TagDb;
 
 #[derive(sqlx::FromRow, Deserialize, Serialize, Debug)]
-pub(crate) struct BookmarkDb {
+struct BookmarkDb {
     id: PostID,
     url: String,
     title: String,
@@ -27,32 +27,32 @@ pub(crate) struct BookmarkDb {
 }
 
 #[derive(sqlx::FromRow, Deserialize, Serialize)]
-pub(crate) struct BookmarkRequest {
-    pub url: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub notes: Option<String>,
-    pub unread: Option<bool>,
-    pub tag_names: Option<Vec<String>>,
+struct BookmarkRequest {
+    url: String,
+    title: String,
+    description: Option<String>,
+    notes: Option<String>,
+    unread: Option<bool>,
+    tag_names: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Default)]
-pub(crate) struct BookmarkResponse {
-    pub(crate) id: PostID,
-    pub(crate) url: String,
-    pub(crate) title: String,
-    pub(crate) description: Option<String>,
-    pub(crate) notes: Option<String>,
-    pub(crate) unread: bool,
-    pub(crate) tag_names: Vec<String>,
-    pub(crate) date_added: String,
-    pub(crate) date_modified: String,
+struct BookmarkResponse {
+    id: PostID,
+    url: String,
+    title: String,
+    description: Option<String>,
+    notes: Option<String>,
+    unread: bool,
+    tag_names: Vec<String>,
+    date_added: String,
+    date_modified: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub(crate) struct BookmarksResponse {
+struct BookmarksResponse {
     count: usize,
-    pub(crate) results: Vec<BookmarkResponse>,
+    results: Vec<BookmarkResponse>,
 }
 
 impl From<BookmarkDb> for BookmarkResponse {

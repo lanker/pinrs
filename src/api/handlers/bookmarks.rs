@@ -439,17 +439,14 @@ async fn handle_put_bookmark(
     }
 }
 
-async fn handle_post_bookmark(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<BookmarkRequest>,
-) -> Result<Json<BookmarkResponse>, StatusCode> {
+async fn add_bookmark(state: &AppState, bookmark: BookmarkRequest) -> PostID {
     // add post
     let post = match sqlx::query("INSERT INTO posts (url, title, unread, description, notes, date_added, date_modified) VALUES ($1, $2, $3, $4, $5, unixepoch(), unixepoch())")
-        .bind(payload.url)
-        .bind(payload.title)
-        .bind(payload.unread)
-        .bind(payload.description)
-        .bind(payload.notes)
+        .bind(bookmark.url)
+        .bind(bookmark.title)
+        .bind(bookmark.unread)
+        .bind(bookmark.description)
+        .bind(bookmark.notes)
         .execute(&state.pool)
         .await
     {
@@ -462,7 +459,7 @@ async fn handle_post_bookmark(
 
     let post_id = post.unwrap().last_insert_rowid() as PostID;
 
-    for tag in payload.tag_names.unwrap_or_default() {
+    for tag in bookmark.tag_names.unwrap_or_default() {
         let _ = match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE name = $1")
             .bind(&tag)
             .fetch_all(&state.pool)
@@ -480,9 +477,7 @@ async fn handle_post_bookmark(
                     {
                         Ok(tag) => {
                             debug!("inserted tag: {}", tag.last_insert_rowid());
-                            let _ =
-                                add_tag_to_post(&state.clone(), post_id, tag.last_insert_rowid())
-                                    .await;
+                            let _ = add_tag_to_post(state, post_id, tag.last_insert_rowid()).await;
                             Ok(())
                         }
                         Err(err) => {
@@ -494,13 +489,22 @@ async fn handle_post_bookmark(
                 1 => {
                     let tag_id = tags_found[0].id;
                     debug!("tags_found: {:?}", tags_found);
-                    let _ = add_tag_to_post(&state.clone(), post_id, tag_id).await;
+                    let _ = add_tag_to_post(&state, post_id, tag_id).await;
                     Ok(())
                 }
                 _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
             },
         };
     }
+
+    post_id
+}
+
+async fn handle_post_bookmark(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<BookmarkRequest>,
+) -> Result<Json<BookmarkResponse>, StatusCode> {
+    let post_id = add_bookmark(&state, payload).await;
 
     match get_bookmark(state, post_id).await {
         Some(post) => Ok(Json(post)),

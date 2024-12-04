@@ -7,7 +7,7 @@ use chrono::{TimeZone, Utc};
 use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
-use sqlx::Row;
+use sqlx::{Row, SqlitePool};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
@@ -296,14 +296,14 @@ async fn handle_get_bookmark(
 }
 
 async fn add_tag_to_post(
-    state: &AppState,
+    pool: &SqlitePool,
     post_id: PostID,
     tag_id: TagID,
 ) -> Result<(), StatusCode> {
     match sqlx::query("INSERT INTO post_tag (post_id, tag_id) VALUES ($1, $2)")
         .bind(post_id)
         .bind(tag_id)
-        .execute(&state.pool)
+        .execute(pool)
         .await
     {
         Ok(_) => {
@@ -366,7 +366,7 @@ async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<S
 
         // if new tag doesn't exist among the old tags, we need to add it to post
         if !old_tag_ids.contains(&new_tag_id) {
-            let _ = add_tag_to_post(state, post_id, new_tag_id).await;
+            let _ = add_tag_to_post(&state.pool, post_id, new_tag_id).await;
         } else {
             // remove the tag from old_tag_ids
             let index = old_tag_ids.iter().position(|x| *x == new_tag_id).unwrap();
@@ -439,7 +439,7 @@ async fn handle_put_bookmark(
     }
 }
 
-async fn add_bookmark(state: &AppState, bookmark: BookmarkRequest) -> PostID {
+pub(crate) async fn add_bookmark(pool: &SqlitePool, bookmark: BookmarkRequest) -> PostID {
     // add post
     let post = match sqlx::query("INSERT INTO posts (url, title, unread, description, notes, date_added, date_modified) VALUES ($1, $2, $3, $4, $5, unixepoch(), unixepoch())")
         .bind(bookmark.url)
@@ -447,7 +447,7 @@ async fn add_bookmark(state: &AppState, bookmark: BookmarkRequest) -> PostID {
         .bind(bookmark.unread)
         .bind(bookmark.description)
         .bind(bookmark.notes)
-        .execute(&state.pool)
+        .execute(pool)
         .await
     {
         Ok(post) => Ok(post),
@@ -462,7 +462,7 @@ async fn add_bookmark(state: &AppState, bookmark: BookmarkRequest) -> PostID {
     for tag in bookmark.tag_names.unwrap_or_default() {
         let _ = match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE name = $1")
             .bind(&tag)
-            .fetch_all(&state.pool)
+            .fetch_all(pool)
             .await
         {
             Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -472,12 +472,12 @@ async fn add_bookmark(state: &AppState, bookmark: BookmarkRequest) -> PostID {
                         "INSERT INTO tags (name, date_added) VALUES ($1, unixepoch())",
                     )
                     .bind(tag)
-                    .execute(&state.pool)
+                    .execute(pool)
                     .await
                     {
                         Ok(tag) => {
                             debug!("inserted tag: {}", tag.last_insert_rowid());
-                            let _ = add_tag_to_post(state, post_id, tag.last_insert_rowid()).await;
+                            let _ = add_tag_to_post(pool, post_id, tag.last_insert_rowid()).await;
                             Ok(())
                         }
                         Err(err) => {
@@ -489,7 +489,7 @@ async fn add_bookmark(state: &AppState, bookmark: BookmarkRequest) -> PostID {
                 1 => {
                     let tag_id = tags_found[0].id;
                     debug!("tags_found: {:?}", tags_found);
-                    let _ = add_tag_to_post(&state, post_id, tag_id).await;
+                    let _ = add_tag_to_post(pool, post_id, tag_id).await;
                     Ok(())
                 }
                 _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -504,7 +504,7 @@ async fn handle_post_bookmark(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BookmarkRequest>,
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
-    let post_id = add_bookmark(&state, payload).await;
+    let post_id = add_bookmark(&state.pool, payload).await;
 
     match get_bookmark(state, post_id).await {
         Some(post) => Ok(Json(post)),

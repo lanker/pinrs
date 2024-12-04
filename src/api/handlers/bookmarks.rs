@@ -529,7 +529,6 @@ mod tests {
     use hyper::header;
     use tower::ServiceExt; // for `oneshot` and `ready`
 
-    // TODO: get from command line args
     const TOKEN: &str = "abc";
 
     fn get_random_string(len: usize) -> String {
@@ -609,7 +608,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_post() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let CreatedBookmark {
             bookmark,
@@ -672,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_post() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let CreatedBookmark {
             bookmark,
@@ -721,7 +720,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_tags_to_post() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let CreatedBookmark {
             bookmark,
@@ -829,7 +828,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_post_limit() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         add_post(app.clone(), None).await;
         add_post(app.clone(), None).await;
@@ -882,7 +881,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tag() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let tag1 = vec![get_random_string(5)];
         let post1 = add_post(app.clone(), Some(tag1.clone())).await;
@@ -939,7 +938,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_free_text() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let post1 = add_post(app.clone(), None).await;
         add_post(app.clone(), None).await;
@@ -981,7 +980,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tag_and_free_text() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let post1 = add_post(app.clone(), None).await;
         let post2 = add_post(

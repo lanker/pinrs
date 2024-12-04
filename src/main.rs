@@ -1,5 +1,5 @@
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::Response,
@@ -7,6 +7,7 @@ use axum::{
 };
 use hyper::header::{self};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use std::env;
 use std::sync::Arc;
 use tower::Layer;
 use tower_http::cors::CorsLayer;
@@ -22,12 +23,14 @@ type TagID = PostID;
 
 pub struct AppState {
     pool: SqlitePool,
+    token: String,
 }
 
-// TODO: get from command line args
-pub const TOKEN: &str = "abc";
-
-async fn auth(req: Request, next: Next) -> Result<Response, StatusCode> {
+async fn auth(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
     let token = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -38,13 +41,16 @@ async fn auth(req: Request, next: Next) -> Result<Response, StatusCode> {
                 .map(|stripped| stripped.to_owned())
         });
 
-    if token == Some(TOKEN.to_owned()) {
+    if token.is_none() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let token = token.unwrap();
+
+    if token == state.token {
         Ok(next.run(req).await)
     } else {
-        error!(
-            "Failed to authenticate with token: {}",
-            token.unwrap_or_default()
-        );
+        error!("Failed to authenticate with token: {}", token);
         Err(StatusCode::UNAUTHORIZED)
     }
 }
@@ -163,8 +169,8 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     pool
 }
 
-pub(crate) async fn app(pool: SqlitePool) -> Router {
-    let state = Arc::new(AppState { pool });
+pub(crate) async fn app(pool: SqlitePool, token: String) -> Router {
+    let state = Arc::new(AppState { pool, token });
 
     let router = crate::api::configure(state.clone());
 
@@ -177,8 +183,11 @@ pub(crate) async fn app(pool: SqlitePool) -> Router {
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
+
+    let token = env::var("PINRS_TOKEN").expect("Need to set environment variable PINRS_TOKEN");
+
     let pool = setup_db(false).await;
-    let app = app(pool).await;
+    let app = app(pool, token).await;
 
     let app = NormalizePathLayer::trim_trailing_slash().layer(app);
 
@@ -207,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn auth() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone()).await;
+        let app = app(pool.clone(), "abc".to_owned()).await;
 
         let response = app
             .clone()
@@ -228,7 +237,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks"))
-                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .header(header::AUTHORIZATION, "Token abc")
                     .body(Body::empty())
                     .unwrap(),
             )

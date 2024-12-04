@@ -196,9 +196,6 @@ async fn main() -> Result<(), anyhow::Error> {
     axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
         .await
         .unwrap();
-    //axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-    //    .serve(app.await.into_make_service())
-    //    .await?;
 
     Ok(())
 }
@@ -211,7 +208,7 @@ mod tests {
         http::{Request, StatusCode},
     };
     use hyper::header;
-    use tower::ServiceExt; // for `oneshot` and `ready`
+    use tower::ServiceExt;
 
     #[tokio::test]
     async fn auth() {

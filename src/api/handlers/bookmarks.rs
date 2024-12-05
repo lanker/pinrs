@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
 use super::tags::TagDb;
@@ -26,14 +27,16 @@ struct BookmarkDb {
     date_modified: i64,
 }
 
-#[derive(sqlx::FromRow, Deserialize, Serialize)]
-struct BookmarkRequest {
-    url: String,
-    title: String,
-    description: Option<String>,
-    notes: Option<String>,
-    unread: Option<bool>,
-    tag_names: Option<Vec<String>>,
+#[derive(sqlx::FromRow, Debug, Deserialize, Serialize)]
+pub(crate) struct BookmarkRequest {
+    pub(crate) url: String,
+    pub(crate) title: String,
+    pub(crate) description: Option<String>,
+    pub(crate) notes: Option<String>,
+    pub(crate) unread: Option<bool>,
+    pub(crate) tag_names: Option<Vec<String>>,
+    pub(crate) date_added: Option<i64>,
+    pub(crate) date_modified: Option<i64>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Default)]
@@ -439,25 +442,30 @@ async fn handle_put_bookmark(
     }
 }
 
-pub(crate) async fn add_bookmark(pool: &SqlitePool, bookmark: BookmarkRequest) -> PostID {
+pub(crate) async fn add_bookmark(
+    pool: &SqlitePool,
+    bookmark: BookmarkRequest,
+) -> Result<PostID, StatusCode> {
     // add post
-    let post = match sqlx::query("INSERT INTO posts (url, title, unread, description, notes, date_added, date_modified) VALUES ($1, $2, $3, $4, $5, unixepoch(), unixepoch())")
+    let post = match sqlx::query("INSERT INTO posts (url, title, unread, description, notes, date_added, date_modified) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(bookmark.url)
         .bind(bookmark.title)
         .bind(bookmark.unread)
         .bind(bookmark.description)
         .bind(bookmark.notes)
+        .bind(bookmark.date_added.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64))
+        .bind(bookmark.date_modified.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64))
         .execute(pool)
         .await
     {
-        Ok(post) => Ok(post),
+        Ok(post) => post,
         Err(err) => {
             error!("Failed to add bookmark: {}", err);
-            Err(StatusCode::BAD_REQUEST)
+            return Err(StatusCode::BAD_REQUEST);
         }
     };
 
-    let post_id = post.unwrap().last_insert_rowid() as PostID;
+    let post_id = post.last_insert_rowid() as PostID;
 
     for tag in bookmark.tag_names.unwrap_or_default() {
         let _ = match sqlx::query_as::<_, TagDb>("SELECT * FROM tags WHERE name = $1")
@@ -497,14 +505,17 @@ pub(crate) async fn add_bookmark(pool: &SqlitePool, bookmark: BookmarkRequest) -
         };
     }
 
-    post_id
+    Ok(post_id)
 }
 
 async fn handle_post_bookmark(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BookmarkRequest>,
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
-    let post_id = add_bookmark(&state.pool, payload).await;
+    let post_id = match add_bookmark(&state.pool, payload).await {
+        Ok(post_id) => post_id,
+        Err(status) => return Err(status),
+    };
 
     match get_bookmark(state, post_id).await {
         Some(post) => Ok(Json(post)),
@@ -582,6 +593,8 @@ mod tests {
             notes: Some(notes),
             unread: Some(false),
             tag_names: Some(tag_names),
+            date_added: None,
+            date_modified: None,
         };
         let bookmark = serde_json::to_string(&bookmark_req).unwrap();
         //let bookmark = Json(&BookmarkRequest{url: url.to_owned(), title: title.to_owned(), description: None, notes: None, unread: Some(false), tag_names: None });
@@ -765,6 +778,8 @@ mod tests {
             notes: None,
             unread: Some(false),
             tag_names: Some(vec![expected_tag_names[1].clone(), new_tag.clone()]),
+            date_added: None,
+            date_modified: None,
         };
         let bookmark_json = serde_json::to_string(&bookmark_req).unwrap();
         // update bookmark

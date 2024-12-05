@@ -5,6 +5,7 @@ use axum::{
     response::Response,
     Router, ServiceExt,
 };
+use clap::Parser;
 use hyper::header::{self};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::env;
@@ -17,6 +18,7 @@ use tracing::error;
 use tower_http::normalize_path::NormalizePathLayer;
 
 pub mod api;
+mod import;
 
 type PostID = i64;
 type TagID = PostID;
@@ -24,6 +26,12 @@ type TagID = PostID;
 pub struct AppState {
     pool: SqlitePool,
     token: String,
+}
+
+#[derive(Parser)]
+pub struct Arguments {
+    #[arg(long)]
+    import: Option<String>,
 }
 
 async fn auth(
@@ -183,6 +191,14 @@ pub(crate) async fn app(pool: SqlitePool, token: String) -> Router {
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
+
+    let args = Arguments::parse();
+
+    if args.import.is_some() {
+        let pool = setup_db(false).await;
+        import::import(args.import.unwrap(), &pool).await?;
+        return Ok(());
+    }
 
     let token = env::var("PINRS_TOKEN").expect("Need to set environment variable PINRS_TOKEN");
 

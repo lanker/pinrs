@@ -203,9 +203,10 @@ struct BookmarkQuery {
     limit: Option<u32>,
     _offset: Option<u32>,
 }
-async fn handle_get_bookmarks(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<BookmarkQuery>,
+
+async fn get_bookmarks(
+    pool: &SqlitePool,
+    query: BookmarkQuery,
 ) -> Result<Json<BookmarksResponse>, StatusCode> {
     let limit = query.limit.unwrap_or(100);
 
@@ -267,7 +268,7 @@ async fn handle_get_bookmarks(
 
     match sqlx::query_as::<_, BookmarkDb>(sql.as_ref())
         .bind(limit)
-        .fetch_all(&state.pool)
+        .fetch_all(pool)
         .await
     {
         Ok(rows) => {
@@ -286,6 +287,13 @@ async fn handle_get_bookmarks(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+async fn handle_get_bookmarks(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<BookmarkQuery>,
+) -> Result<Json<BookmarksResponse>, StatusCode> {
+    get_bookmarks(&state.pool, query).await
 }
 
 async fn handle_get_bookmark(

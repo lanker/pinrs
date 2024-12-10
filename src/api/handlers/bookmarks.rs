@@ -201,7 +201,7 @@ fn parse_search(query: String) -> SearchQuery {
 pub(crate) struct BookmarkQuery {
     pub(crate) q: Option<String>,
     pub(crate) limit: Option<u32>,
-    pub(crate) _offset: Option<u32>,
+    pub(crate) offset: Option<u32>,
 }
 
 pub(crate) async fn get_bookmarks(
@@ -209,6 +209,7 @@ pub(crate) async fn get_bookmarks(
     query: BookmarkQuery,
 ) -> Vec<BookmarkResponse> {
     let limit = query.limit.unwrap_or(100);
+    let offset = query.offset.unwrap_or(0);
 
     let mut where_clause = "".to_owned();
     let search_query: SearchQuery;
@@ -265,7 +266,11 @@ pub(crate) async fn get_bookmarks(
             "#,
         where_clause,
         if limit > 0 {
-            format!("LIMIT {}", limit)
+            if offset > 0 {
+                format!("LIMIT {} OFFSET {}", limit, offset)
+            } else {
+                format!("LIMIT {}", limit)
+            }
         } else {
             "".to_owned()
         },
@@ -864,7 +869,7 @@ mod tests {
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         add_post(app.clone(), None).await;
-        add_post(app.clone(), None).await;
+        let post1 = add_post(app.clone(), None).await;
 
         // get posts
         let response = app
@@ -893,7 +898,6 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    //.uri(format!("/api/bookmarks"))
                     .uri("/api/bookmarks?limit=1")
                     .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
@@ -909,6 +913,138 @@ mod tests {
         let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
 
         assert!(posts.results.iter().count() == 1);
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post1.bookmark.title));
+    }
+
+    #[tokio::test]
+    async fn test_get_post_offset() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
+
+        let post1 = add_post(app.clone(), None).await;
+        let post2 = add_post(app.clone(), None).await;
+        let post3 = add_post(app.clone(), None).await;
+        add_post(app.clone(), None).await;
+        add_post(app.clone(), None).await;
+
+        // get posts
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 5);
+
+        // get posts with offset
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bookmarks?offset=2")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 3);
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post1.bookmark.title));
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post2.bookmark.title));
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post3.bookmark.title));
+    }
+
+    #[tokio::test]
+    async fn test_get_post_limit_offset() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
+
+        add_post(app.clone(), None).await;
+        let post1 = add_post(app.clone(), None).await;
+        let post2 = add_post(app.clone(), None).await;
+        add_post(app.clone(), None).await;
+        add_post(app.clone(), None).await;
+
+        // get posts
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 5);
+
+        // get posts with offset
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bookmarks?offset=2&limit=2")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 2);
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post1.bookmark.title));
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post2.bookmark.title));
     }
 
     #[tokio::test]

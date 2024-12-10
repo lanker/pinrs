@@ -202,7 +202,7 @@ async fn main() -> Result<(), anyhow::Error> {
         return Ok(());
     } else if args.export_html {
         import::export_html(&pool).await?;
-        return Ok(())
+        return Ok(());
     }
 
     let token = env::var("PINRS_TOKEN").expect("Need to set environment variable PINRS_TOKEN");

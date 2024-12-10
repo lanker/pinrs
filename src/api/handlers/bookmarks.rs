@@ -40,16 +40,16 @@ pub(crate) struct BookmarkRequest {
 }
 
 #[derive(Deserialize, Serialize, Debug, Default)]
-struct BookmarkResponse {
-    id: PostID,
-    url: String,
-    title: String,
-    description: Option<String>,
-    notes: Option<String>,
-    unread: bool,
-    tag_names: Vec<String>,
-    date_added: String,
-    date_modified: String,
+pub(crate) struct BookmarkResponse {
+    pub(crate) id: PostID,
+    pub(crate) url: String,
+    pub(crate) title: String,
+    pub(crate) description: Option<String>,
+    pub(crate) notes: Option<String>,
+    pub(crate) unread: bool,
+    pub(crate) tag_names: Vec<String>,
+    pub(crate) date_added: String,
+    pub(crate) date_modified: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -197,17 +197,17 @@ fn parse_search(query: String) -> SearchQuery {
 }
 
 // bookmarks?q=#audio namen&unread=yes
-#[derive(Deserialize)]
-struct BookmarkQuery {
-    q: Option<String>,
-    limit: Option<u32>,
-    _offset: Option<u32>,
+#[derive(Deserialize, Default)]
+pub(crate) struct BookmarkQuery {
+    pub(crate) q: Option<String>,
+    pub(crate) limit: Option<u32>,
+    pub(crate) _offset: Option<u32>,
 }
 
-async fn get_bookmarks(
+pub(crate) async fn get_bookmarks(
     pool: &SqlitePool,
     query: BookmarkQuery,
-) -> Result<Json<BookmarksResponse>, StatusCode> {
+) -> Vec<BookmarkResponse> {
     let limit = query.limit.unwrap_or(100);
 
     let mut where_clause = "".to_owned();
@@ -261,9 +261,14 @@ async fn get_bookmarks(
                 LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
                 {}
                 GROUP BY posts.id
-                LIMIT $1
+                {}
             "#,
         where_clause,
+        if limit > 0 {
+            format!("LIMIT {}", limit)
+        } else {
+            "".to_owned()
+        },
     );
 
     match sqlx::query_as::<_, BookmarkDb>(sql.as_ref())
@@ -277,14 +282,11 @@ async fn get_bookmarks(
                 let post: BookmarkResponse = row.into();
                 posts.push(post);
             }
-            Ok(Json(BookmarksResponse {
-                count: posts.len(),
-                results: posts,
-            }))
+            posts
         }
         Err(err) => {
             error!("Failed to get posts: {}", err);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            vec![]
         }
     }
 }
@@ -293,7 +295,11 @@ async fn handle_get_bookmarks(
     State(state): State<Arc<AppState>>,
     Query(query): Query<BookmarkQuery>,
 ) -> Result<Json<BookmarksResponse>, StatusCode> {
-    get_bookmarks(&state.pool, query).await
+    let bookmarks = get_bookmarks(&state.pool, query).await;
+    Ok(Json(BookmarksResponse {
+        count: bookmarks.len(),
+        results: bookmarks,
+    }))
 }
 
 async fn handle_get_bookmark(

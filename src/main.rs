@@ -32,6 +32,8 @@ pub struct AppState {
 pub struct Arguments {
     #[arg(long)]
     import: Option<String>,
+    #[arg(long = "export-html")]
+    export_html: bool,
 }
 
 async fn auth(
@@ -192,17 +194,19 @@ pub(crate) async fn app(pool: SqlitePool, token: String) -> Router {
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
 
-    let args = Arguments::parse();
+    let pool = setup_db(false).await;
 
+    let args = Arguments::parse();
     if args.import.is_some() {
-        let pool = setup_db(false).await;
         import::import(args.import.unwrap(), &pool).await?;
         return Ok(());
+    } else if args.export_html {
+        import::export_html(&pool).await?;
+        return Ok(())
     }
 
     let token = env::var("PINRS_TOKEN").expect("Need to set environment variable PINRS_TOKEN");
 
-    let pool = setup_db(false).await;
     let app = app(pool, token).await;
 
     let app = NormalizePathLayer::trim_trailing_slash().layer(app);

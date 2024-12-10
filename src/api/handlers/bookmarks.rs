@@ -262,6 +262,7 @@ pub(crate) async fn get_bookmarks(
                 LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
                 {}
                 GROUP BY posts.id
+                ORDER BY posts.date_added DESC, posts.id DESC
                 {}
             "#,
         where_clause,

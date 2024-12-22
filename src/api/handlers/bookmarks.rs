@@ -222,7 +222,7 @@ pub(crate) async fn get_bookmarks(
             .into_iter()
             .map(|tag| format!("name = '{}'", tag))
             .collect::<Vec<String>>()
-            .join("OR");
+            .join("OR ");
 
         if !tag_str.is_empty() {
             extra_sql.push(format!(
@@ -1103,6 +1103,53 @@ mod tests {
         assert!(posts.results[0].tag_names.contains(&tag1[0]));
         assert!(posts.results[0].url == post1.bookmark.url);
         assert!(posts.results[0].title == post1.bookmark.title);
+    }
+
+    #[tokio::test]
+    async fn test_get_bookmark_tags() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
+
+        let tag1 = vec![get_random_string(5)];
+        let post1 = add_post(app.clone(), Some(tag1.clone())).await;
+        let tag2 = vec![get_random_string(5)];
+        let post2 = add_post(app.clone(), Some(tag2.clone())).await;
+        add_post(app.clone(), None).await;
+
+        // get posts with query for tags
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks?q=%23{}%20%23{}", tag1[0], tag2[0]))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 2);
+
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post1.bookmark.title
+                && post.url == post1.bookmark.url
+                && post.tag_names.contains(&tag1[0])));
+
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.title == post2.bookmark.title
+                && post.url == post2.bookmark.url
+                && post.tag_names.contains(&tag2[0])));
     }
 
     #[tokio::test]

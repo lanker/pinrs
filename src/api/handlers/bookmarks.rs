@@ -202,6 +202,7 @@ pub(crate) struct BookmarkQuery {
     pub(crate) q: Option<String>,
     pub(crate) limit: Option<u32>,
     pub(crate) offset: Option<u32>,
+    pub(crate) unread: Option<String>,
 }
 
 pub(crate) async fn get_bookmarks(
@@ -210,6 +211,7 @@ pub(crate) async fn get_bookmarks(
 ) -> Vec<BookmarkResponse> {
     let limit = query.limit.unwrap_or(100);
     let offset = query.offset.unwrap_or(0);
+    let unread = query.unread.unwrap_or("no".to_owned());
 
     let mut where_clause = "".to_owned();
     let search_query: SearchQuery;
@@ -265,7 +267,14 @@ pub(crate) async fn get_bookmarks(
                 ORDER BY posts.date_added DESC, posts.id DESC
                 {}
             "#,
-        where_clause,
+        // TODO add test case for unread
+        if !where_clause.is_empty() && unread == "yes" {
+            format!("{} AND posts.unread = 1", where_clause)
+        } else if where_clause.is_empty() && unread == "yes" {
+            "WHERE posts.unread = 1".to_owned()
+        } else {
+            where_clause
+        },
         if limit > 0 {
             if offset > 0 {
                 format!("LIMIT {} OFFSET {}", limit, offset)
@@ -576,7 +585,7 @@ mod tests {
         response: Response,
     }
 
-    async fn add_post(app: Router, tags: Option<Vec<String>>) -> CreatedBookmark {
+    async fn add_post(app: Router, tags: Option<Vec<String>>, unread: bool) -> CreatedBookmark {
         let url = get_random_string(5);
         let title = format!(
             "{} {} {}",
@@ -611,7 +620,7 @@ mod tests {
             title: title.to_owned(),
             description: Some(description),
             notes: Some(notes),
-            unread: Some(false),
+            unread: Some(unread),
             tag_names: Some(tag_names),
             date_added: None,
             date_modified: None,
@@ -650,7 +659,7 @@ mod tests {
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone(), None).await;
+        } = add_post(app.clone(), None, false).await;
 
         // get posts
         let response = app
@@ -713,7 +722,7 @@ mod tests {
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone(), None).await;
+        } = add_post(app.clone(), None, false).await;
 
         // get existing post
         let response = app
@@ -762,7 +771,7 @@ mod tests {
         let CreatedBookmark {
             bookmark,
             response: _response,
-        } = add_post(app.clone(), None).await;
+        } = add_post(app.clone(), None, false).await;
 
         // get existing post
         let response = app
@@ -869,8 +878,8 @@ mod tests {
         let pool = setup_db(true).await;
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
-        add_post(app.clone(), None).await;
-        let post1 = add_post(app.clone(), None).await;
+        add_post(app.clone(), None, false).await;
+        let post1 = add_post(app.clone(), None, false).await;
 
         // get posts
         let response = app
@@ -925,11 +934,11 @@ mod tests {
         let pool = setup_db(true).await;
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
-        let post1 = add_post(app.clone(), None).await;
-        let post2 = add_post(app.clone(), None).await;
-        let post3 = add_post(app.clone(), None).await;
-        add_post(app.clone(), None).await;
-        add_post(app.clone(), None).await;
+        let post1 = add_post(app.clone(), None, false).await;
+        let post2 = add_post(app.clone(), None, false).await;
+        let post3 = add_post(app.clone(), None, false).await;
+        add_post(app.clone(), None, false).await;
+        add_post(app.clone(), None, false).await;
 
         // get posts
         let response = app
@@ -991,11 +1000,11 @@ mod tests {
         let pool = setup_db(true).await;
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
-        add_post(app.clone(), None).await;
-        let post1 = add_post(app.clone(), None).await;
-        let post2 = add_post(app.clone(), None).await;
-        add_post(app.clone(), None).await;
-        add_post(app.clone(), None).await;
+        add_post(app.clone(), None, false).await;
+        let post1 = add_post(app.clone(), None, false).await;
+        let post2 = add_post(app.clone(), None, false).await;
+        add_post(app.clone(), None, false).await;
+        add_post(app.clone(), None, false).await;
 
         // get posts
         let response = app
@@ -1054,8 +1063,8 @@ mod tests {
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let tag1 = vec![get_random_string(5)];
-        let post1 = add_post(app.clone(), Some(tag1.clone())).await;
-        add_post(app.clone(), None).await;
+        let post1 = add_post(app.clone(), Some(tag1.clone()), false).await;
+        add_post(app.clone(), None, false).await;
 
         // get posts
         let response = app
@@ -1111,10 +1120,10 @@ mod tests {
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
         let tag1 = vec![get_random_string(5)];
-        let post1 = add_post(app.clone(), Some(tag1.clone())).await;
+        let post1 = add_post(app.clone(), Some(tag1.clone()), false).await;
         let tag2 = vec![get_random_string(5)];
-        let post2 = add_post(app.clone(), Some(tag2.clone())).await;
-        add_post(app.clone(), None).await;
+        let post2 = add_post(app.clone(), Some(tag2.clone()), false).await;
+        add_post(app.clone(), None, false).await;
 
         // get posts with query for tags
         let response = app
@@ -1157,8 +1166,8 @@ mod tests {
         let pool = setup_db(true).await;
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
-        let post1 = add_post(app.clone(), None).await;
-        add_post(app.clone(), None).await;
+        let post1 = add_post(app.clone(), None, false).await;
+        add_post(app.clone(), None, false).await;
 
         // get posts with query for free text
         let response = app
@@ -1199,13 +1208,14 @@ mod tests {
         let pool = setup_db(true).await;
         let app = app(pool.clone(), TOKEN.to_owned()).await;
 
-        let post1 = add_post(app.clone(), None).await;
+        let post1 = add_post(app.clone(), None, false).await;
         let post2 = add_post(
             app.clone(),
             Some(vec![post1.bookmark.tag_names.clone().unwrap()[0].to_owned()]),
+            false,
         )
         .await;
-        add_post(app.clone(), None).await;
+        add_post(app.clone(), None, false).await;
 
         // tag used for multiple posts but free text from post2 => should get post2 only
         let response = app
@@ -1240,5 +1250,83 @@ mod tests {
 
         assert!(posts.results[0].url == post2.bookmark.url);
         assert!(posts.results[0].title == post2.bookmark.title);
+    }
+
+    #[tokio::test]
+    async fn test_get_bookmark_unread() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
+
+        let post1 = add_post(app.clone(), None, false).await;
+        let post2 = add_post(
+            app.clone(),
+            Some(vec![post1.bookmark.tag_names.clone().unwrap()[0].to_owned()]),
+            true,
+        )
+        .await;
+        add_post(app.clone(), None, false).await;
+
+        // tag used for multiple posts but free text from post2 => should get post2 only
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks?unread=yes",))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 1);
+
+        assert!(posts.results[0].url == post2.bookmark.url);
+        assert!(posts.results[0].title == post2.bookmark.title);
+    }
+
+    #[tokio::test]
+    async fn test_get_bookmark_unread_tag() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
+
+        let post1 = add_post(app.clone(), None, true).await;
+        add_post(app.clone(), None, true).await;
+        add_post(app.clone(), None, true).await;
+
+        // tag used for multiple posts but free text from post2 => should get post2 only
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/bookmarks?unread=yes&q=%23{}",
+                        post1.bookmark.tag_names.unwrap()[0],
+                    ))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 1);
+
+        assert!(posts
+            .results
+            .iter()
+            .any(|post| post.url == post1.bookmark.url));
     }
 }

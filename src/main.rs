@@ -41,7 +41,7 @@ async fn auth(
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = req
+    let mut token = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|auth_header| auth_header.to_str().ok())
@@ -52,6 +52,19 @@ async fn auth(
         });
 
     if token.is_none() {
+        token = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|auth_header| auth_header.to_str().ok())
+            .and_then(|auth_value| {
+                auth_value
+                    .strip_prefix("Bearer ")
+                    .map(|stripped| stripped.to_owned())
+            });
+    }
+
+    if token.is_none() {
+        error!("No token");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -231,7 +244,7 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn auth() {
+    async fn auth_token() {
         let pool = setup_db(true).await;
         let app = app(pool.clone(), "abc".to_owned()).await;
 
@@ -241,6 +254,40 @@ mod tests {
                 Request::builder()
                     .uri("/api/bookmarks")
                     .header(header::AUTHORIZATION, format!("Token 123"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks"))
+                    .header(header::AUTHORIZATION, "Token abc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_bearer() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), "abc".to_owned()).await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Bearer 123"))
                     .body(Body::empty())
                     .unwrap(),
             )

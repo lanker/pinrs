@@ -176,7 +176,7 @@ struct SearchQuery {
     text: Vec<String>,
 }
 
-fn parse_search(query: &String) -> SearchQuery {
+fn parse_search(query: &str) -> SearchQuery {
     let tokens = query.split_whitespace();
 
     let mut tags = vec![];

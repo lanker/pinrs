@@ -6,16 +6,17 @@ use axum::{
     Router, ServiceExt,
 };
 use clap::Parser;
+use directories::ProjectDirs;
 use hyper::header::{self};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::env;
+use std::fs;
 use std::sync::Arc;
 use tower::Layer;
 use tower_http::cors::CorsLayer;
+use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::trace::TraceLayer;
 use tracing::error;
-
-use tower_http::normalize_path::NormalizePathLayer;
 
 pub mod api;
 mod import;
@@ -79,13 +80,31 @@ async fn auth(
 }
 
 pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
+    let db_path = if memory {
+        "sqlite::memory:".to_owned()
+    } else if let Ok(env_db) = env::var("PINRS_DB") {
+        format!("sqlite://{}?mode=rwc", env_db)
+    } else {
+        match ProjectDirs::from("se", "lanker", "pinrs") {
+            Some(base_dirs) => {
+                let dir = base_dirs.data_dir();
+                match fs::create_dir_all(dir) {
+                    Ok(_) => format!(
+                        "sqlite://{}/pinrs.db?mode=rwc",
+                        dir.to_string_lossy().into_owned()
+                    ),
+                    Err(_) => "sqlite://pinrs.db?mode=rwc".to_owned(),
+                }
+            }
+            None => "sqlite://pinrs.db?mode=rwc".to_owned(),
+        }
+    };
+
+    println!("Using database: {}", db_path);
+
     let pool = SqlitePoolOptions::new()
         .max_connections(3)
-        .connect(if memory {
-            "sqlite::memory:"
-        } else {
-            "sqlite://pinrs.db?mode=rwc"
-        })
+        .connect(db_path.as_str())
         .await
         .unwrap();
 

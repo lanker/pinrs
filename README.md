@@ -1,7 +1,6 @@
 <div align="center" style="margin-bottom: 3rem">
   <img
-    src="logo.svg"
-    width="300"
+    src="logo.png"
     alt="pinrs logo"
   />
 </div>

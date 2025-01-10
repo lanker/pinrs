@@ -92,8 +92,8 @@ pub fn configure(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(handle_get_bookmarks))
         .route("/", post(handle_post_bookmark))
-        .route("/:id", get(handle_get_bookmark))
-        .route("/:id", put(handle_put_bookmark))
+        .route("/{id}", get(handle_get_bookmark))
+        .route("/{id}", put(handle_put_bookmark))
         .route("/check", get(handle_check_bookmark))
         .with_state(state.clone())
 }

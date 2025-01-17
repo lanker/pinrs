@@ -1,7 +1,6 @@
 use crate::{AppState, PostID, TagID};
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
-use axum::routing::{post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
 use hyper::StatusCode;
@@ -94,6 +93,7 @@ pub fn configure(state: Arc<AppState>) -> Router {
         .route("/", post(handle_post_bookmark))
         .route("/{id}", get(handle_get_bookmark))
         .route("/{id}", put(handle_put_bookmark))
+        .route("/{id}", delete(handle_delete_bookmark))
         .route("/check", get(handle_check_bookmark))
         .with_state(state.clone())
 }
@@ -377,6 +377,27 @@ async fn handle_get_bookmark(
     match get_bookmark(state, id).await {
         Some(post) => Ok(Json(post)),
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+async fn handle_delete_bookmark(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<PostID>,
+) -> Result<(), StatusCode> {
+    match sqlx::query("DELETE from posts WHERE id=$1")
+        .bind(id)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(_) => {
+            info!("deleted bookmark: {}", id);
+            Ok(())
+        }
+        Err(err) => {
+            // probably the tag was already added to the post
+            error!("Failed to delete bookmark: {} ({})", id, err);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 
@@ -1381,5 +1402,124 @@ mod tests {
             .results
             .iter()
             .any(|post| post.url == post1.bookmark.url));
+    }
+
+    #[tokio::test]
+    async fn test_delete_bookmark() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
+
+        add_post(app.clone(), None, true).await;
+        add_post(app.clone(), None, true).await;
+
+        let CreatedBookmark {
+            bookmark,
+            response: _response,
+        } = add_post(app.clone(), None, false).await;
+
+        // get existing post
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/bookmarks/check?url={}", bookmark.url))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status() == StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let res: ResponseCheck = serde_json::from_str(body_str.as_str()).unwrap();
+
+        // delete post
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/bookmarks/{}", res.bookmark.id))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status() == StatusCode::OK);
+
+        // get posts
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 2);
+
+        assert!(posts.results.iter().any(|post| post.url != bookmark.url));
+    }
+
+    #[tokio::test]
+    async fn test_delete_bookmark_non_existing() {
+        let pool = setup_db(true).await;
+        let app = app(pool.clone(), TOKEN.to_owned()).await;
+
+        add_post(app.clone(), None, true).await;
+        add_post(app.clone(), None, true).await;
+
+        // delete non-existing post
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/bookmarks/12345"))
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status() == StatusCode::OK);
+
+        // get posts
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/bookmarks")
+                    .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(posts.results.iter().count() == 2);
     }
 }

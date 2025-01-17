@@ -243,12 +243,15 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let token = env::var("PINRS_TOKEN").expect("Need to set environment variable PINRS_TOKEN");
+    let port = env::var("PINRS_PORT").unwrap_or("3000".to_owned());
 
     let app = app(pool, token).await;
 
     let app = NormalizePathLayer::trim_trailing_slash().layer(app);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
         .await

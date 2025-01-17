@@ -9,9 +9,9 @@ use clap::Parser;
 use directories::ProjectDirs;
 use hyper::header::{self};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use std::env;
 use std::fs;
 use std::sync::Arc;
+use std::{env, path::Path};
 use tower::Layer;
 use tower_http::cors::CorsLayer;
 use tower_http::normalize_path::NormalizePathLayer;
@@ -83,7 +83,12 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     let db_path = if memory {
         "sqlite::memory:".to_owned()
     } else if let Ok(env_db) = env::var("PINRS_DB") {
-        format!("sqlite://{}?mode=rwc", env_db)
+        let path = Path::new(&env_db);
+        let dir = path.parent().expect("Couldn't get directory of database");
+        match fs::create_dir_all(dir) {
+            Ok(_) => format!("sqlite://{}?mode=rwc", env_db),
+            Err(err) => panic!("Failed to create database: {}", err),
+        }
     } else {
         match ProjectDirs::from("se", "lanker", "pinrs") {
             Some(base_dirs) => {

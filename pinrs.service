@@ -1,0 +1,15 @@
+[Unit]
+Description=Pinrs - bookmarking service
+Documentation=https://github.com/lanker/pinrs
+After=network.target
+
+[Service]
+Restart=always
+ExecStart=/usr/bin/pinrs
+TimeoutStopSec=20s
+DynamicUser=true
+StateDirectory=pinrs
+Environment="PINRS_DB=/var/lib/pinrs/pinrs.db" "PINRS_TOKEN=<!!CHANGE_ME!!>"
+
+[Install]
+WantedBy=multi-user.target

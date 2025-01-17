@@ -26,6 +26,16 @@ ci:
 	cargo clippy -- -D warnings
 	cargo test
 
+.PHONY: install
+install: target/release/pinrs pinrs.service
+	install -Dm755 -t /usr/bin $<
+	install -Dm644 $(word 2,$^) /usr/lib/systemd/system/$(word 2,$^)
+
+.PHONY: uninstall
+uninstall:
+	rm -f /usr/bin/pinrs
+	rm -f /usr/lib/systemd/system/pinrs.service
+
 .PHONY: clean
 clean:
 	cargo clean

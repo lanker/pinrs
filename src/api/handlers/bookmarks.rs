@@ -163,10 +163,10 @@ async fn handle_check_bookmark(
                 };
                 Ok(Json(response))
             }
-            None => Err(StatusCode::NOT_FOUND),
+            None => Err(StatusCode::NO_CONTENT),
         },
 
-        Err(_err) => Err(StatusCode::NOT_FOUND),
+        Err(_err) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -834,7 +834,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response.status() == StatusCode::NOT_FOUND);
+        assert!(response.status() == StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]

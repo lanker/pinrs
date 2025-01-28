@@ -35,7 +35,9 @@ pub(crate) struct BookmarkRequest {
     pub(crate) notes: Option<String>,
     pub(crate) unread: Option<bool>,
     pub(crate) tag_names: Option<Vec<String>>,
+    #[serde(skip_deserializing)]
     pub(crate) date_added: Option<i64>,
+    #[serde(skip_deserializing)]
     pub(crate) date_modified: Option<i64>,
 }
 

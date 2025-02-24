@@ -100,16 +100,34 @@ pub fn configure(state: Arc<AppState>) -> Router {
         .with_state(state.clone())
 }
 
-async fn get_bookmark(state: Arc<AppState>, id: PostID) -> Option<BookmarkResponse> {
-    let sql = r#"SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
+struct LookupType<'a> {
+    id: Option<PostID>,
+    url: Option<&'a str>,
+}
+
+async fn get_bookmark(state: Arc<AppState>, from: LookupType<'_>) -> Option<BookmarkResponse> {
+    let mut sql: QueryBuilder<'_, sqlx::Sqlite> = QueryBuilder::new(
+        r#"SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
                     FROM posts
                     LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
-                    LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
-                    WHERE posts.id = $1
-                    GROUP BY posts.id"#;
+                    LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)"#,
+    );
 
-    match sqlx::query_as::<_, BookmarkDb>(sql)
-        .bind(id)
+    if from.id.is_some() {
+        sql.push(" WHERE posts.id = ");
+        sql.push_bind(from.id.unwrap());
+    } else if from.url.is_some() {
+        sql.push(" WHERE posts.url = ");
+        sql.push_bind(from.url.unwrap());
+    } else {
+        error!("get_bookmark called with the wrong parameters");
+        return None;
+    }
+
+    sql.push(" GROUP BY posts.id");
+
+    match sql
+        .build_query_as::<BookmarkDb>()
         .fetch_optional(&state.pool)
         .await
     {
@@ -129,9 +147,14 @@ async fn get_bookmark(state: Arc<AppState>, id: PostID) -> Option<BookmarkRespon
 }
 
 #[derive(Deserialize, Serialize, Debug, Default)]
+struct ResponseCheckMetadata {
+    url: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Default)]
 struct ResponseCheck {
-    bookmark: BookmarkResponse,
-    metadata: Option<String>,
+    bookmark: Option<BookmarkResponse>,
+    metadata: Option<ResponseCheckMetadata>,
     auto_tags: Vec<String>,
 }
 #[derive(Deserialize)]
@@ -142,33 +165,31 @@ async fn handle_check_bookmark(
     State(state): State<Arc<AppState>>,
     Query(url): Query<Url>,
 ) -> Result<Json<ResponseCheck>, StatusCode> {
-    let sql = r#"
-            SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
-                FROM posts
-                LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
-                LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
-                WHERE posts.url = $1
-                GROUP BY posts.id"#;
-
-    match sqlx::query_as::<_, BookmarkDb>(sql)
-        .bind(url.url)
-        .fetch_optional(&state.pool)
-        .await
-    {
-        Ok(row) => match row {
-            Some(row) => {
-                let post: BookmarkResponse = row.into();
-                let response = ResponseCheck {
-                    bookmark: post,
-                    metadata: None,
-                    auto_tags: vec![],
-                };
-                Ok(Json(response))
-            }
-            None => Err(StatusCode::NO_CONTENT),
+    match get_bookmark(
+        state,
+        LookupType {
+            url: Some(&url.url),
+            id: None,
         },
-
-        Err(_err) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    )
+    .await
+    {
+        Some(post) => {
+            let response = ResponseCheck {
+                bookmark: Some(post),
+                metadata: Some(ResponseCheckMetadata { url: url.url }),
+                auto_tags: vec![],
+            };
+            Ok(Json(response))
+        }
+        None => {
+            let response = ResponseCheck {
+                bookmark: None,
+                metadata: Some(ResponseCheckMetadata { url: url.url }),
+                auto_tags: vec![],
+            };
+            Ok(Json(response))
+        }
     }
 }
 
@@ -376,7 +397,15 @@ async fn handle_get_bookmark(
     State(state): State<Arc<AppState>>,
     Path(id): Path<PostID>,
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
-    match get_bookmark(state, id).await {
+    match get_bookmark(
+        state,
+        LookupType {
+            id: Some(id),
+            url: None,
+        },
+    )
+    .await
+    {
         Some(post) => Ok(Json(post)),
         None => Err(StatusCode::NOT_FOUND),
     }
@@ -541,7 +570,15 @@ async fn handle_put_bookmark(
 
     update_tags_for_post(&state.clone(), id, payload.tag_names.unwrap_or_default()).await;
 
-    match get_bookmark(state, id).await {
+    match get_bookmark(
+        state,
+        LookupType {
+            id: Some(id),
+            url: None,
+        },
+    )
+    .await
+    {
         Some(post) => Ok(Json(post)),
         None => Err(StatusCode::NOT_FOUND),
     }
@@ -622,7 +659,15 @@ async fn handle_post_bookmark(
         Err(status) => return Err(status),
     };
 
-    match get_bookmark(state, post_id).await {
+    match get_bookmark(
+        state,
+        LookupType {
+            id: Some(post_id),
+            url: None,
+        },
+    )
+    .await
+    {
         Some(post) => Ok(Json(post)),
         None => Err(StatusCode::NOT_FOUND),
     }
@@ -821,7 +866,13 @@ mod tests {
         let body_str = String::from_utf8(body.to_vec()).unwrap();
         let res: ResponseCheck = serde_json::from_str(body_str.as_str()).unwrap();
 
-        assert!(bookmark.url == res.bookmark.url && bookmark.title == res.bookmark.title);
+        let res_bookmark = res.bookmark.unwrap();
+        assert!(bookmark.url == res_bookmark.url);
+        assert!(bookmark.title == res_bookmark.title);
+
+        let expected_tag_names = bookmark.tag_names.unwrap();
+        assert!(res_bookmark.tag_names.contains(&expected_tag_names[0]));
+        assert!(res_bookmark.tag_names.contains(&expected_tag_names[1]));
 
         // get non-existing post
         let response = app
@@ -836,7 +887,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response.status() == StatusCode::NO_CONTENT);
+        assert!(response.status() == StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        let res: ResponseCheck = serde_json::from_str(body_str.as_str()).unwrap();
+
+        assert!(res.bookmark.is_none());
     }
 
     #[tokio::test]
@@ -870,9 +929,10 @@ mod tests {
         let res: ResponseCheck = serde_json::from_str(body_str.as_str()).unwrap();
 
         let expected_tag_names = bookmark.tag_names.unwrap();
-        assert!(res.bookmark.tag_names.contains(&expected_tag_names[0]));
-        assert!(res.bookmark.tag_names.contains(&expected_tag_names[1]));
-        assert!(res.bookmark.date_added == res.bookmark.date_modified);
+        let res_bookmark = res.bookmark.unwrap();
+        assert!(res_bookmark.tag_names.contains(&expected_tag_names[0]));
+        assert!(res_bookmark.tag_names.contains(&expected_tag_names[1]));
+        assert!(res_bookmark.date_added == res_bookmark.date_modified);
 
         // update tags for post
         let new_tag = get_random_string(5);
@@ -893,7 +953,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(format!("/api/bookmarks/{}", res.bookmark.id))
+                    .uri(format!("/api/bookmarks/{}", res_bookmark.id))
                     .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
                     .body(Body::from(bookmark_json))
@@ -1445,7 +1505,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(format!("/api/bookmarks/{}", res.bookmark.id))
+                    .uri(format!("/api/bookmarks/{}", res.bookmark.unwrap().id))
                     .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),

@@ -1,5 +1,6 @@
 use crate::{AppState, PostID, TagID};
 use axum::extract::{Path, Query, State};
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
@@ -653,10 +654,10 @@ pub(crate) async fn add_bookmark(
 async fn handle_post_bookmark(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BookmarkRequest>,
-) -> Result<Json<BookmarkResponse>, StatusCode> {
+) -> impl IntoResponse {
     let post_id = match add_bookmark(&state.pool, payload).await {
         Ok(post_id) => post_id,
-        Err(status) => return Err(status),
+        Err(status) => return (StatusCode::BAD_REQUEST, Err(format!("{}", status))),
     };
 
     match get_bookmark(
@@ -668,8 +669,11 @@ async fn handle_post_bookmark(
     )
     .await
     {
-        Some(post) => Ok(Json(post)),
-        None => Err(StatusCode::NOT_FOUND),
+        Some(post) => (StatusCode::CREATED, Ok(Json(post))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Err("Failed to get the added bookmark".to_string()),
+        ),
     }
 }
 
@@ -764,7 +768,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::CREATED);
 
         CreatedBookmark {
             bookmark: bookmark_req,

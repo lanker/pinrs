@@ -10,8 +10,39 @@ enough with the excellent [linkding](https://linkding.link/) to be able to use
 the same clients. The goal is **not** to re-implement all of linkding's
 features, for example archiving and multi users will not be supported.
 
-## Installation
+## Building
+```bash
+$ cargo build --release
+```
 
+## Running
+The [pinrs.service](pinrs.service) file can be modified and used to run on a
+system using systemd. A reverse proxy in front of pinrs is recommended.
+
+## Migrating from linkding
+1. Get a copy of the bookmarks from linkding as an json array:
+```bash
+$ curl -s -H "Authorization: Token <TOKEN>" "<HOST>/api/bookmarks/?limit=100000" | jq -c '.results' > linkding.json
+```
+
+The token can be found in the linkding web application, Settings -> REST API.
+
+2. Import to pinrs:
+```bash
+$ PINRS_DB=/path/to/your/pinrs.db pinrs --import linkding.json
+```
+
+## Migrating from pinrs to linkding
+1. Get a copy of the bookmarks from pinrs in Netscape bookmark html:
+```bash
+$ pinrs --export-html > pinrs.html
+```
+
+2. In the linkding web application, import the file in Settings -> General -> Import.
+
+*Note:* exporting from linkding, importing to pinrs, exporting from pinrs and
+then importing to linkding again is not a lossless operation. Fields that
+linkding supports but pinrs doesn't are not preserved.
 
 ## Goals
 - smaller feature set

@@ -59,3 +59,12 @@ linkding supports but pinrs doesn't are not preserved.
   client, the server will never do any outgoing connections.
 - multi users support
 - database compatibility
+
+## Tested clients
+The goal is for all linkding client to work, if you find any problems, please
+create an issue.
+### Desktop
+- [linkding browser extension](https://linkding.link/browser-extension/)
+
+### Android
+- [Pinkt](https://github.com/fibelatti/pinboard-kotlin)

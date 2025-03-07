@@ -282,7 +282,9 @@ pub(crate) async fn get_bookmarks(
             ));
         }
 
-        where_clause = format!("WHERE posts.id IN ({})", extra_sql.join("INTERSECT"));
+        if !extra_sql.is_empty() {
+            where_clause = format!("WHERE posts.id IN ({})", extra_sql.join("INTERSECT"));
+        }
     }
 
     let sql = format!(

@@ -16,15 +16,18 @@ target/debug/pinrs: $(SRC)
 run: target/debug/pinrs
 	cargo run
 
+.PHONY: test
+test:
+	cargo test
+
 .PHONY: run-logs
 run-logs: target/debug/pinrs
 	RUST_LOG=warn cargo run
 
 .PHONY: ci
-ci:
+ci: test
 	cargo fmt --all -- --check
 	cargo clippy -- -D warnings
-	cargo test
 
 .PHONY: install
 install: target/release/pinrs pinrs.service

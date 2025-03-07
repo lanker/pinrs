@@ -242,58 +242,6 @@ pub(crate) async fn get_bookmarks(
     let offset = query.offset.unwrap_or(0);
     let unread = query.unread.unwrap_or("no".to_owned());
 
-    let mut sql: QueryBuilder<'_, sqlx::Sqlite> = QueryBuilder::new(
-        r#"
-            SELECT posts.*, group_concat(tags.name) as tag_names
-                FROM posts
-                LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
-                LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
-        "#,
-    );
-
-    let search_query: SearchQuery;
-    if query.q.is_some() {
-        let mut extra_sql: Vec<String> = vec![];
-        search_query = parse_search(query.q.as_ref().unwrap());
-        // can't bind array in sqlx
-        let tag_str = search_query
-            .tag_names
-            .into_iter()
-            .map(|tag| format!("name = '{}'", tag))
-            .collect::<Vec<String>>()
-            .join("OR ");
-
-        if !tag_str.is_empty() {
-            extra_sql.push(format!(
-                r#"
-                    SELECT post_id
-                        FROM post_tag
-                        WHERE tag_id IN (
-                            SELECT id
-                            FROM tags
-                            WHERE {}
-                        )
-            "#,
-                tag_str
-            ));
-        }
-
-        if !search_query.text.is_empty() {
-            extra_sql.push(format!(
-                r#"
-                    SELECT rowid
-                        FROM posts_fts
-                        WHERE posts_fts
-                            MATCH '{}'
-                "#,
-                search_query.text.join(" ")
-            ));
-        }
-
-        sql.push("WHERE posts.id IN ({})");
-        sql.push_bind(extra_sql.join("INTERSECT"));
-    }
-
     let mut where_clause = "".to_owned();
     let search_query: SearchQuery;
     if query.q.is_some() {

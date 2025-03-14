@@ -12,8 +12,10 @@ use axum::{
 use clap::Parser;
 use directories::ProjectDirs;
 use hyper::header::{self};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::ConnectOptions;
 use std::fs;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{env, path::Path};
 use tower::Layer;
@@ -111,9 +113,14 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
 
     println!("Using database: {}", db_path);
 
+    let options = SqliteConnectOptions::from_str(&db_path)
+        .unwrap()
+        .create_if_missing(true)
+        .log_statements(tracing::log::LevelFilter::Debug);
+
     let pool = SqlitePoolOptions::new()
-        .max_connections(3)
-        .connect(db_path.as_str())
+        .max_connections(5)
+        .connect_with(options)
         .await
         .unwrap();
 

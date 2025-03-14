@@ -242,86 +242,90 @@ pub(crate) async fn get_bookmarks(
     let offset = query.offset.unwrap_or(0);
     let unread = query.unread.unwrap_or("no".to_owned());
 
-    let mut where_clause = "".to_owned();
-    let search_query: SearchQuery;
-    if query.q.is_some() {
-        let mut extra_sql: Vec<String> = vec![];
-        search_query = parse_search(&query.q.unwrap());
-        // can't bind array in sqlx
-        let tag_str = search_query
-            .tag_names
-            .into_iter()
-            .map(|tag| format!("name = '{}'", tag))
-            .collect::<Vec<String>>()
-            .join("OR ");
+    let mut sql: QueryBuilder<'_, sqlx::Sqlite> = QueryBuilder::new(
+        r#"
+            SELECT posts.*, group_concat(tags.name) as tag_names
+                FROM posts
+                LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
+                LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
+            "#,
+    );
 
-        if !tag_str.is_empty() {
-            extra_sql.push(format!(
+    let search_query: SearchQuery;
+    let mut have_where_clause = false;
+    if query.q.is_some() {
+        search_query = parse_search(&query.q.unwrap());
+
+        if !search_query.tag_names.is_empty() {
+            have_where_clause = true;
+            sql.push("WHERE posts.id IN (");
+            sql.push(
                 r#"
                     SELECT post_id
                         FROM post_tag
                         WHERE tag_id IN (
                             SELECT id
                             FROM tags
-                            WHERE {}
-                        )
-            "#,
-                tag_str
-            ));
+                            WHERE "#,
+            );
+            let mut first = true;
+            for tag in search_query.tag_names.iter() {
+                if !first {
+                    sql.push(" OR ");
+                }
+                first = false;
+                sql.push(" name = ");
+                sql.push_bind(tag);
+            }
+            sql.push(")");
+            if search_query.text.is_empty() {
+                sql.push(")");
+            }
         }
 
         if !search_query.text.is_empty() {
-            extra_sql.push(format!(
+            have_where_clause = true;
+            if !search_query.tag_names.is_empty() {
+                sql.push(" INTERSECT ");
+            } else {
+                sql.push("WHERE posts.id IN (");
+            }
+            sql.push(
                 r#"
                     SELECT rowid
                         FROM posts_fts
                         WHERE posts_fts
-                            MATCH '{}'
-                            "#,
-                search_query.text.join(" "),
-            ));
-        }
-
-        if !extra_sql.is_empty() {
-            where_clause = format!("WHERE posts.id IN ({})", extra_sql.join("INTERSECT"));
+                            MATCH "#,
+            );
+            sql.push_bind(search_query.text.join(" "));
+            sql.push(")");
         }
     }
 
-    let sql = format!(
+    if unread == "yes" {
+        sql.push(format!(
+            " {} posts.unread = 1",
+            if have_where_clause { "AND" } else { "WHERE" }
+        ));
+    }
+
+    sql.push(
         r#"
-            SELECT posts.*, group_concat(tags.name) as tag_names
-                FROM posts
-                LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
-                LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
-                {}
                 GROUP BY posts.id
                 ORDER BY posts.date_added DESC, posts.id DESC
-                {}
-            "#,
-        // TODO add test case for unread
-        if !where_clause.is_empty() && unread == "yes" {
-            format!("{} AND posts.unread = 1", where_clause)
-        } else if where_clause.is_empty() && unread == "yes" {
-            "WHERE posts.unread = 1".to_owned()
-        } else {
-            where_clause
-        },
-        if limit > 0 {
-            if offset > 0 {
-                format!("LIMIT {} OFFSET {}", limit, offset)
-            } else {
-                format!("LIMIT {}", limit)
-            }
-        } else {
-            "".to_owned()
-        },
+                "#,
     );
 
-    match sqlx::query_as::<_, BookmarkDb>(sql.as_ref())
-        .bind(limit)
-        .fetch_all(pool)
-        .await
-    {
+    if limit > 0 {
+        sql.push(" LIMIT ");
+        sql.push_bind(limit);
+    }
+    if offset > 0 {
+        sql.push(" OFFSET ");
+        sql.push_bind(offset);
+    }
+
+    match sql.build_query_as::<BookmarkDb>().fetch_all(pool).await {
         Ok(rows) => {
             let mut posts = vec![];
             for row in rows {

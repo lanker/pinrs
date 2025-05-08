@@ -102,7 +102,7 @@ pub fn configure(state: Arc<AppState>) -> Router {
         .route("/{id}", put(handle_put_bookmark))
         .route("/{id}", delete(handle_delete_bookmark))
         .route("/check", get(handle_check_bookmark))
-        .with_state(state.clone())
+        .with_state(state)
 }
 
 struct LookupType<'a> {
@@ -527,7 +527,7 @@ async fn handle_put_bookmark(
         }
     };
 
-    update_tags_for_post(&state.clone(), id, payload.tag_names.unwrap_or_default()).await;
+    update_tags_for_post(&state, id, payload.tag_names.unwrap_or_default()).await;
 
     match get_bookmark(
         state,
@@ -693,7 +693,7 @@ mod tests {
             None => {
                 let tag1 = get_random_string(5);
                 let tag2 = get_random_string(5);
-                vec![tag1.clone(), tag2.clone()]
+                vec![tag1, tag2]
             }
         };
 
@@ -712,7 +712,6 @@ mod tests {
         //let bookmark = Json(&BookmarkRequest{url: url.to_owned(), title: title.to_owned(), description: None, notes: None, unread: Some(false), tag_names: None });
         // insert a post
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -737,7 +736,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_post() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let CreatedBookmark {
             bookmark,
@@ -775,7 +774,6 @@ mod tests {
 
         // get post
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks/{}", post.id))
@@ -800,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_post() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let CreatedBookmark {
             bookmark,
@@ -838,7 +836,6 @@ mod tests {
 
         // get non-existing post
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks/check?url={}", get_random_string(5)))
@@ -863,7 +860,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_tags_to_post() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let CreatedBookmark {
             bookmark,
@@ -940,7 +937,6 @@ mod tests {
 
         // check that GET /tags/ not returning the removed tag
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/tags")
@@ -974,7 +970,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_post_limit() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         add_post(app.clone(), None, false).await;
         let post1 = add_post(app.clone(), None, false).await;
@@ -1003,7 +999,6 @@ mod tests {
 
         // get posts with limit
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/bookmarks?limit=1")
@@ -1030,7 +1025,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_post_offset() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let post1 = add_post(app.clone(), None, false).await;
         let post2 = add_post(app.clone(), None, false).await;
@@ -1061,7 +1056,6 @@ mod tests {
 
         // get posts with offset
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/bookmarks?offset=2")
@@ -1096,7 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_post_limit_offset() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         add_post(app.clone(), None, false).await;
         let post1 = add_post(app.clone(), None, false).await;
@@ -1127,7 +1121,6 @@ mod tests {
 
         // get posts with offset
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/bookmarks?offset=2&limit=2")
@@ -1158,7 +1151,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tag() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let tag1 = vec![get_random_string(5)];
         let post1 = add_post(app.clone(), Some(tag1.clone()), false).await;
@@ -1188,7 +1181,6 @@ mod tests {
 
         // get posts with query for tags
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks?q=%23{}", tag1[0]))
@@ -1215,7 +1207,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tags() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let tag1 = vec![get_random_string(5)];
         let post1 = add_post(app.clone(), Some(tag1.clone()), false).await;
@@ -1225,7 +1217,6 @@ mod tests {
 
         // get posts with query for tags
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks?q=%23{}%20%23{}", tag1[0], tag2[0]))
@@ -1262,14 +1253,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_free_text() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let post1 = add_post(app.clone(), None, false).await;
         add_post(app.clone(), None, false).await;
 
         // get posts with query for free text
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!(
@@ -1304,7 +1294,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tag_and_free_text() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let post1 = add_post(app.clone(), None, false).await;
         let post2 = add_post(
@@ -1317,7 +1307,6 @@ mod tests {
 
         // tag used for multiple posts but free text from post2 => should get post2 only
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!(
@@ -1353,7 +1342,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_unread() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let post1 = add_post(app.clone(), None, false).await;
         let post2 = add_post(
@@ -1366,7 +1355,6 @@ mod tests {
 
         // tag used for multiple posts but free text from post2 => should get post2 only
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks?unread=yes",))
@@ -1392,7 +1380,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_unread_tag() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         let post1 = add_post(app.clone(), None, true).await;
         add_post(app.clone(), None, true).await;
@@ -1400,7 +1388,6 @@ mod tests {
 
         // tag used for multiple posts but free text from post2 => should get post2 only
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!(
@@ -1431,7 +1418,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_bookmark() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         add_post(app.clone(), None, true).await;
         add_post(app.clone(), None, true).await;
@@ -1479,7 +1466,6 @@ mod tests {
 
         // get posts
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/bookmarks")
@@ -1504,7 +1490,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_bookmark_non_existing() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned()).await;
 
         add_post(app.clone(), None, true).await;
         add_post(app.clone(), None, true).await;
@@ -1527,7 +1513,6 @@ mod tests {
 
         // get posts
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/bookmarks")

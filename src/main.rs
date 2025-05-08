@@ -233,7 +233,7 @@ pub(crate) async fn app(pool: SqlitePool, token: String) -> Router {
     let router = crate::api::configure(state.clone());
 
     router
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth))
+        .route_layer(middleware::from_fn_with_state(state, auth))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
 }
@@ -284,7 +284,7 @@ mod tests {
     #[tokio::test]
     async fn auth_token() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), "abc".to_owned()).await;
+        let app = app(pool, "abc".to_owned()).await;
 
         let response = app
             .clone()
@@ -301,7 +301,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks"))
@@ -318,7 +317,7 @@ mod tests {
     #[tokio::test]
     async fn auth_bearer() {
         let pool = setup_db(true).await;
-        let app = app(pool.clone(), "abc".to_owned()).await;
+        let app = app(pool, "abc".to_owned()).await;
 
         let response = app
             .clone()
@@ -335,7 +334,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
         let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/api/bookmarks"))

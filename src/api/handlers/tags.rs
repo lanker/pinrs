@@ -46,7 +46,7 @@ impl From<TagDb> for TagResponse {
 pub fn configure(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(handle_get_tags))
-        .with_state(state.clone())
+        .with_state(state)
 }
 
 async fn handle_get_tags(

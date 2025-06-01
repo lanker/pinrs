@@ -114,7 +114,7 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     println!("Using database: {}", db_path);
 
     let options = SqliteConnectOptions::from_str(&db_path)
-        .unwrap()
+        .expect("Failed to parse database string")
         .create_if_missing(true)
         .log_statements(tracing::log::LevelFilter::Debug);
 
@@ -122,7 +122,7 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
         .max_connections(5)
         .connect_with(options)
         .await
-        .unwrap();
+        .expect("Failed to connect to database");
 
     let _ = sqlx::query(
         r#"
@@ -262,11 +262,11 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
-        .unwrap();
+        .expect("Failed to bind to port");
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
         .await
-        .unwrap();
+        .expect("Failed to create server");
 
     Ok(())
 }

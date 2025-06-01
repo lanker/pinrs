@@ -68,13 +68,10 @@ struct BookmarksResponse {
 impl From<BookmarkDb> for BookmarkResponse {
     fn from(val: BookmarkDb) -> Self {
         let mut tags = vec![];
-        if val.tag_names.is_some() {
-            tags = val
-                .tag_names
-                .unwrap()
-                .split(",")
-                .map(String::from)
-                .collect();
+        if let Some(tag_names) = val.tag_names {
+            tags = tag_names.split(",").map(String::from).collect();
+        } else {
+            error!("Failed to parse tags");
         }
 
         let added = Utc.timestamp_opt(val.date_added, 0).unwrap();
@@ -118,12 +115,12 @@ async fn get_bookmark(state: Arc<AppState>, from: LookupType<'_>) -> Option<Book
                     LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)"#,
     );
 
-    if from.id.is_some() {
+    if let Some(id) = from.id {
         sql.push(" WHERE posts.id = ");
-        sql.push_bind(from.id.unwrap());
-    } else if from.url.is_some() {
+        sql.push_bind(id);
+    } else if let Some(url) = from.url {
         sql.push(" WHERE posts.url = ");
-        sql.push_bind(from.url.unwrap());
+        sql.push_bind(url);
     } else {
         error!("get_bookmark called with the wrong parameters");
         return None;
@@ -253,8 +250,8 @@ pub(crate) async fn get_bookmarks(
 
     let search_query: SearchQuery;
     let mut have_where_clause = false;
-    if query.q.is_some() {
-        search_query = parse_search(&query.q.unwrap());
+    if let Some(q) = query.q {
+        search_query = parse_search(&q);
 
         if !search_query.tag_names.is_empty() {
             have_where_clause = true;

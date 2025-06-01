@@ -2,6 +2,11 @@
 name = "pinrs"
 version = "0.1.0"
 edition = "2021"
+license-file = "LICENSES/AGPL-3.0-or-later.txt"
+repository = "https://github.com/lanker/pinrs"
+description = "Server for a bookmarking service. Compatible with linkding clients."
+keywords = ["bookmarks", "linkding"]
+categories = ["web-programming::http-server"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

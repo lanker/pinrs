@@ -24,10 +24,13 @@ test:
 run-logs: target/debug/pinrs
 	RUST_LOG=warn cargo run
 
-.PHONY: ci
-ci: test
+.PHONY: lint
+lint:
 	cargo fmt --all -- --check
-	cargo clippy -- -D warnings
+	cargo clippy -- -D clippy::pedantic -D warnings
+
+.PHONY: ci
+ci: lint test
 
 .PHONY: install
 install: target/release/pinrs pinrs.service

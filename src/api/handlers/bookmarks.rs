@@ -69,7 +69,7 @@ impl From<BookmarkDb> for BookmarkResponse {
     fn from(val: BookmarkDb) -> Self {
         let mut tags = vec![];
         if let Some(tag_names) = val.tag_names {
-            tags = tag_names.split(",").map(String::from).collect();
+            tags = tag_names.split(',').map(String::from).collect();
         } else {
             error!("Failed to parse tags");
         }
@@ -109,10 +109,10 @@ struct LookupType<'a> {
 
 async fn get_bookmark(state: Arc<AppState>, from: LookupType<'_>) -> Option<BookmarkResponse> {
     let mut sql: QueryBuilder<'_, sqlx::Sqlite> = QueryBuilder::new(
-        r#"SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
+        r"SELECT posts.*,GROUP_CONCAT(tags.name) AS tag_names
                     FROM posts
                     LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
-                    LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)"#,
+                    LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)",
     );
 
     if let Some(id) = from.id {
@@ -167,7 +167,7 @@ async fn handle_check_bookmark(
     State(state): State<Arc<AppState>>,
     Query(url): Query<Url>,
 ) -> Result<Json<ResponseCheck>, StatusCode> {
-    match get_bookmark(
+    if let Some(post) = get_bookmark(
         state,
         LookupType {
             url: Some(&url.url),
@@ -176,22 +176,19 @@ async fn handle_check_bookmark(
     )
     .await
     {
-        Some(post) => {
-            let response = ResponseCheck {
-                bookmark: Some(post),
-                metadata: Some(ResponseCheckMetadata { url: url.url }),
-                auto_tags: vec![],
-            };
-            Ok(Json(response))
-        }
-        None => {
-            let response = ResponseCheck {
-                bookmark: None,
-                metadata: Some(ResponseCheckMetadata { url: url.url }),
-                auto_tags: vec![],
-            };
-            Ok(Json(response))
-        }
+        let response = ResponseCheck {
+            bookmark: Some(post),
+            metadata: Some(ResponseCheckMetadata { url: url.url }),
+            auto_tags: vec![],
+        };
+        Ok(Json(response))
+    } else {
+        let response = ResponseCheck {
+            bookmark: None,
+            metadata: Some(ResponseCheckMetadata { url: url.url }),
+            auto_tags: vec![],
+        };
+        Ok(Json(response))
     }
 }
 
@@ -240,12 +237,12 @@ pub(crate) async fn get_bookmarks(
     let unread = query.unread.unwrap_or("no".to_owned());
 
     let mut sql: QueryBuilder<'_, sqlx::Sqlite> = QueryBuilder::new(
-        r#"
+        r"
             SELECT posts.*, group_concat(tags.name) as tag_names
                 FROM posts
                 LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
                 LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
-            "#,
+            ",
     );
 
     let search_query: SearchQuery;
@@ -257,16 +254,16 @@ pub(crate) async fn get_bookmarks(
             have_where_clause = true;
             sql.push("WHERE posts.id IN (");
             sql.push(
-                r#"
+                r"
                     SELECT post_id
                         FROM post_tag
                         WHERE tag_id IN (
                             SELECT id
                             FROM tags
-                            WHERE "#,
+                            WHERE ",
             );
             let mut first = true;
-            for tag in search_query.tag_names.iter() {
+            for tag in &search_query.tag_names {
                 if !first {
                     sql.push(" OR ");
                 }
@@ -282,17 +279,17 @@ pub(crate) async fn get_bookmarks(
 
         if !search_query.text.is_empty() {
             have_where_clause = true;
-            if !search_query.tag_names.is_empty() {
-                sql.push(" INTERSECT ");
-            } else {
+            if search_query.tag_names.is_empty() {
                 sql.push("WHERE posts.id IN (");
+            } else {
+                sql.push(" INTERSECT ");
             }
             sql.push(
-                r#"
+                r"
                     SELECT rowid
                         FROM posts_fts
                         WHERE posts_fts
-                            MATCH "#,
+                            MATCH ",
             );
             sql.push_bind(search_query.text.join(" "));
             sql.push(")");
@@ -307,10 +304,10 @@ pub(crate) async fn get_bookmarks(
     }
 
     sql.push(
-        r#"
+        r"
                 GROUP BY posts.id
                 ORDER BY posts.date_added DESC, posts.id DESC
-                "#,
+                ",
     );
 
     if limit > 0 {
@@ -458,12 +455,12 @@ async fn update_tags_for_post(state: &AppState, post_id: PostID, new_tags: Vec<S
             };
 
         // if new tag doesn't exist among the old tags, we need to add it to post
-        if !old_tag_ids.contains(&new_tag_id) {
-            let _ = add_tag_to_post(&state.pool, post_id, new_tag_id).await;
-        } else {
+        if old_tag_ids.contains(&new_tag_id) {
             // remove the tag from old_tag_ids
             let index = old_tag_ids.iter().position(|x| *x == new_tag_id).unwrap();
             old_tag_ids.remove(index);
+        } else {
+            let _ = add_tag_to_post(&state.pool, post_id, new_tag_id).await;
         }
     }
 
@@ -502,11 +499,11 @@ async fn handle_put_bookmark(
 ) -> Result<Json<BookmarkResponse>, StatusCode> {
     // add post
     let _post = match sqlx::query(
-        r#"
+        r"
             UPDATE posts
                 SET (url, title, unread, description, notes, date_modified) = ($1, $2, $3, $4, $5, unixepoch())
                 WHERE posts.id = $6
-        "#,
+        ",
     )
     .bind(payload.url)
     .bind(payload.title)
@@ -544,6 +541,14 @@ pub(crate) async fn add_bookmark(
     pool: &SqlitePool,
     bookmark: BookmarkRequest,
 ) -> Result<PostID, StatusCode> {
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    )
+    .unwrap_or_default();
+
     // add post
     let post = match sqlx::query("INSERT INTO posts (url, title, unread, description, notes, date_added, date_modified) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(bookmark.url)
@@ -551,8 +556,8 @@ pub(crate) async fn add_bookmark(
         .bind(bookmark.unread)
         .bind(bookmark.description)
         .bind(bookmark.notes)
-        .bind(bookmark.date_added.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64))
-        .bind(bookmark.date_modified.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64))
+        .bind(bookmark.date_added.unwrap_or(now))
+        .bind(bookmark.date_modified.unwrap_or(now))
         .execute(pool)
         .await
     {
@@ -612,7 +617,7 @@ async fn handle_post_bookmark(
 ) -> impl IntoResponse {
     let post_id = match add_bookmark(&state.pool, payload).await {
         Ok(post_id) => post_id,
-        Err(status) => return (StatusCode::BAD_REQUEST, Err(format!("{}", status))),
+        Err(status) => return (StatusCode::BAD_REQUEST, Err(format!("{status}"))),
     };
 
     match get_bookmark(
@@ -733,7 +738,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_post() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let CreatedBookmark {
             bookmark,
@@ -795,7 +800,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_post() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let CreatedBookmark {
             bookmark,
@@ -857,7 +862,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_tags_to_post() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let CreatedBookmark {
             bookmark,
@@ -967,7 +972,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_post_limit() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         add_post(app.clone(), None, false).await;
         let post1 = add_post(app.clone(), None, false).await;
@@ -1022,7 +1027,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_post_offset() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let post1 = add_post(app.clone(), None, false).await;
         let post2 = add_post(app.clone(), None, false).await;
@@ -1087,7 +1092,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_post_limit_offset() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         add_post(app.clone(), None, false).await;
         let post1 = add_post(app.clone(), None, false).await;
@@ -1148,7 +1153,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tag() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let tag1 = vec![get_random_string(5)];
         let post1 = add_post(app.clone(), Some(tag1.clone()), false).await;
@@ -1204,7 +1209,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tags() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let tag1 = vec![get_random_string(5)];
         let post1 = add_post(app.clone(), Some(tag1.clone()), false).await;
@@ -1250,7 +1255,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_free_text() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let post1 = add_post(app.clone(), None, false).await;
         add_post(app.clone(), None, false).await;
@@ -1291,7 +1296,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_tag_and_free_text() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let post1 = add_post(app.clone(), None, false).await;
         let post2 = add_post(
@@ -1339,7 +1344,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_unread() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let post1 = add_post(app.clone(), None, false).await;
         let post2 = add_post(
@@ -1377,7 +1382,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bookmark_unread_tag() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         let post1 = add_post(app.clone(), None, true).await;
         add_post(app.clone(), None, true).await;
@@ -1415,7 +1420,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_bookmark() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         add_post(app.clone(), None, true).await;
         add_post(app.clone(), None, true).await;
@@ -1487,7 +1492,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_bookmark_non_existing() {
         let pool = setup_db(true).await;
-        let app = app(pool, TOKEN.to_owned()).await;
+        let app = app(pool, TOKEN.to_owned());
 
         add_post(app.clone(), None, true).await;
         add_post(app.clone(), None, true).await;

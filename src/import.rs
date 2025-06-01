@@ -59,7 +59,7 @@ pub(crate) async fn import(path: String, pool: &SqlitePool) -> Result<()> {
         };
     }
 
-    println!("Imported {} entries", success);
+    println!("Imported {success} entries");
 
     if !failed.is_empty() {
         error!("Failed to import:\n{}", failed.join("\n"));

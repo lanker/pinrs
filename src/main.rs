@@ -55,7 +55,7 @@ async fn auth(
         .and_then(|auth_value| {
             auth_value
                 .strip_prefix("Token ")
-                .map(|stripped| stripped.to_owned())
+                .map(std::borrow::ToOwned::to_owned)
         });
 
     if token.is_none() {
@@ -66,7 +66,7 @@ async fn auth(
             .and_then(|auth_value| {
                 auth_value
                     .strip_prefix("Bearer ")
-                    .map(|stripped| stripped.to_owned())
+                    .map(std::borrow::ToOwned::to_owned)
             });
     }
 
@@ -85,6 +85,7 @@ async fn auth(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     let db_path = if memory {
         "sqlite::memory:".to_owned()
@@ -92,15 +93,15 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
         let path = Path::new(&env_db);
         let dir = path.parent().expect("Couldn't get directory of database");
         match fs::create_dir_all(dir) {
-            Ok(_) => format!("sqlite://{}?mode=rwc", env_db),
-            Err(err) => panic!("Failed to create database: {}", err),
+            Ok(()) => format!("sqlite://{env_db}?mode=rwc"),
+            Err(err) => panic!("Failed to create database: {err}"),
         }
     } else {
         match ProjectDirs::from("se", "lanker", "pinrs") {
             Some(base_dirs) => {
                 let dir = base_dirs.data_dir();
                 match fs::create_dir_all(dir) {
-                    Ok(_) => format!(
+                    Ok(()) => format!(
                         "sqlite://{}/pinrs.db?mode=rwc",
                         dir.to_string_lossy().into_owned()
                     ),
@@ -111,7 +112,7 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
         }
     };
 
-    println!("Using database: {}", db_path);
+    println!("Using database: {db_path}");
 
     let options = SqliteConnectOptions::from_str(&db_path)
         .expect("Failed to parse database string")
@@ -125,7 +126,7 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
         .expect("Failed to connect to database");
 
     let _ = sqlx::query(
-        r#"
+        r"
             CREATE TABLE IF NOT EXISTS posts (
                 id INTEGER PRIMARY KEY,
                 url TEXT NOT NULL UNIQUE,
@@ -136,25 +137,25 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
                 date_added INTEGER,
                 date_modified INTEGER
             );
-        "#,
+        ",
     )
     .execute(&pool)
     .await;
 
     let _ = sqlx::query(
-        r#"
+        r"
             CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 date_added INTEGER
              );
-        "#,
+        ",
     )
     .execute(&pool)
     .await;
 
     let _ = sqlx::query(
-        r#"
+        r"
             CREATE TABLE IF NOT EXISTS post_tag (
                 post_id INTEGER NOT NULL,
                 tag_id INTEGER NOT NULL,
@@ -162,14 +163,14 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
                 FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE,
                 FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
             );
-        "#,
+        ",
     )
     .execute(&pool)
     .await;
 
     // ---------------------- FTS
     let _ = sqlx::query(
-        r#"
+        r"
             CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
                 url,
                 title,
@@ -181,37 +182,37 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
                 content='posts',
                 content_rowid='id'
             );
-        "#,
+        ",
     )
     .execute(&pool)
     .await;
 
     let _ = sqlx::query(
-        r#"
+        r"
             CREATE TRIGGER IF NOT EXISTS posts_ai AFTER INSERT ON posts
                 BEGIN
                     INSERT INTO posts_fts (rowid, url, title, description, notes)
                     VALUES (new.id, new.url, new.title, new.description, new.notes);
                 END;
-    "#,
+    ",
     )
     .execute(&pool)
     .await;
 
     let _ = sqlx::query(
-        r#"
+        r"
             CREATE TRIGGER IF NOT EXISTS posts_ad AFTER DELETE ON posts
                 BEGIN
                     INSERT INTO posts_fts (posts_fts, rowid, url, title, description, notes)
                     VALUES ('delete', old.id, old.url, old.title, old.description, old.notes);
                 END;
-    "#,
+    ",
     )
     .execute(&pool)
     .await;
 
     let _ = sqlx::query(
-        r#"
+        r"
             CREATE TRIGGER IF NOT EXISTS posts_au AFTER UPDATE ON posts
                 BEGIN
                     INSERT INTO posts_fts (posts_fts, rowid, url, title, description, notes)
@@ -219,7 +220,7 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
                     INSERT INTO posts_fts (rowid, url, title, description, notes)
                     VALUES (new.id, new.url, new.title, new.description, new.notes);
                 END;
-    "#,
+    ",
     )
     .execute(&pool)
     .await;
@@ -227,10 +228,10 @@ pub(crate) async fn setup_db(memory: bool) -> SqlitePool {
     pool
 }
 
-pub(crate) async fn app(pool: SqlitePool, token: String) -> Router {
+pub(crate) fn app(pool: SqlitePool, token: String) -> Router {
     let state = Arc::new(AppState { pool, token });
 
-    let router = crate::api::configure(state.clone());
+    let router = crate::api::configure(&state);
 
     router
         .route_layer(middleware::from_fn_with_state(state, auth))
@@ -256,7 +257,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let token = env::var("PINRS_TOKEN").expect("Need to set environment variable PINRS_TOKEN");
     let port = env::var("PINRS_PORT").unwrap_or("3000".to_owned());
 
-    let app = app(pool, token).await;
+    let app = app(pool, token);
 
     let app = NormalizePathLayer::trim_trailing_slash().layer(app);
 
@@ -284,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn auth_token() {
         let pool = setup_db(true).await;
-        let app = app(pool, "abc".to_owned()).await;
+        let app = app(pool, "abc".to_owned());
 
         let response = app
             .clone()
@@ -317,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn auth_bearer() {
         let pool = setup_db(true).await;
-        let app = app(pool, "abc".to_owned()).await;
+        let app = app(pool, "abc".to_owned());
 
         let response = app
             .clone()

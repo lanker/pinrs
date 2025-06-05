@@ -70,8 +70,6 @@ impl From<BookmarkDb> for BookmarkResponse {
         let mut tags = vec![];
         if let Some(tag_names) = val.tag_names {
             tags = tag_names.split(',').map(String::from).collect();
-        } else {
-            error!("Failed to parse tags");
         }
 
         let added = Utc.timestamp_opt(val.date_added, 0).unwrap();

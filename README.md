@@ -63,6 +63,10 @@ linkding supports but pinrs doesn't are not preserved.
 ## Tested clients
 The goal is for all linkding client to work, if you find any problems, please
 create an issue.
+
+### Web
+- [pinls](https://github.com/lanker/pinls)
+
 ### Desktop
 - [linkding browser extension](https://linkding.link/browser-extension/)
 

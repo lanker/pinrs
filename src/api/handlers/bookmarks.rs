@@ -226,6 +226,7 @@ pub(crate) struct BookmarkQuery {
     pub(crate) unread: Option<String>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn get_bookmarks(
     pool: &SqlitePool,
     query: BookmarkQuery,
@@ -236,7 +237,14 @@ pub(crate) async fn get_bookmarks(
 
     let mut sql: QueryBuilder<'_, sqlx::Sqlite> = QueryBuilder::new(
         r"
-            SELECT posts.*, group_concat(tags.name) as tag_names
+            SELECT DISTINCT
+                posts.*,
+                (
+                    SELECT group_concat(tags.name)
+                    FROM post_tag
+                    JOIN tags ON tags.id = post_tag.tag_id
+                    WHERE post_tag.post_id = posts.id
+                ) as tag_names
                 FROM posts
                 LEFT OUTER JOIN post_tag ON (posts.id = post_tag.post_id)
                 LEFT OUTER JOIN tags ON (tags.id = post_tag.tag_id)
@@ -248,6 +256,7 @@ pub(crate) async fn get_bookmarks(
     if let Some(q) = query.q {
         search_query = parse_search(&q);
 
+        // Tag filtering
         if !search_query.tag_names.is_empty() {
             have_where_clause = true;
             sql.push("WHERE posts.id IN (");
@@ -255,35 +264,40 @@ pub(crate) async fn get_bookmarks(
                 r"
                     SELECT post_id
                         FROM post_tag
-                        WHERE tag_id IN (
-                            SELECT id
-                            FROM tags
-                            WHERE ",
+                        JOIN tags ON tags.id = post_tag.tag_id
+                        WHERE tags.name IN (",
             );
+
+            // Add tag names as bound parameters
             let mut first = true;
             for tag in &search_query.tag_names {
                 if !first {
-                    sql.push(" OR ");
+                    sql.push(", ");
                 }
                 first = false;
-                sql.push(" name = ");
                 sql.push_bind(tag);
             }
+
             sql.push(")");
-            if search_query.text.is_empty() {
-                sql.push(")");
-            }
+            sql.push(
+                r"
+                    GROUP BY post_tag.post_id
+                    HAVING COUNT(DISTINCT tags.name) = ",
+            );
+            sql.push_bind(i32::try_from(search_query.tag_names.len()).unwrap_or_default());
+            sql.push(")");
         }
 
+        // Full-text search
         if !search_query.text.is_empty() {
-            have_where_clause = true;
             if search_query.tag_names.is_empty() {
-                sql.push("WHERE posts.id IN (");
+                sql.push(" WHERE ");
             } else {
-                sql.push(" INTERSECT ");
+                sql.push(" AND ");
             }
             sql.push(
                 r"
+                posts.rowid IN (
                     SELECT rowid
                         FROM posts_fts
                         WHERE posts_fts
@@ -294,6 +308,7 @@ pub(crate) async fn get_bookmarks(
         }
     }
 
+    // Unread filter
     if unread == "yes" {
         sql.push(format!(
             " {} posts.unread = 1",
@@ -301,13 +316,14 @@ pub(crate) async fn get_bookmarks(
         ));
     }
 
+    // Ordering
     sql.push(
         r"
-                GROUP BY posts.id
                 ORDER BY posts.date_added DESC, posts.id DESC
-                ",
+        ",
     );
 
+    // Limit and offset
     if limit > 0 {
         sql.push(" LIMIT ");
         sql.push_bind(limit);
@@ -1210,8 +1226,8 @@ mod tests {
         let app = app(pool, TOKEN.to_owned());
 
         let tag1 = vec![get_random_string(5)];
-        let post1 = add_post(app.clone(), Some(tag1.clone()), false).await;
-        let tag2 = vec![get_random_string(5)];
+        add_post(app.clone(), Some(tag1.clone()), false).await;
+        let tag2 = vec![tag1[0].clone(), get_random_string(5)];
         let post2 = add_post(app.clone(), Some(tag2.clone()), false).await;
         add_post(app.clone(), None, false).await;
 
@@ -1219,7 +1235,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/bookmarks?q=%23{}%20%23{}", tag1[0], tag2[0]))
+                    .uri(format!("/api/bookmarks?q=%23{}%20%23{}", tag1[0], tag2[1]))
                     .header(header::AUTHORIZATION, format!("Token {TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
@@ -1233,14 +1249,7 @@ mod tests {
         let body_str = String::from_utf8(body.to_vec()).unwrap();
         let posts: BookmarksResponse = serde_json::from_str(body_str.as_str()).unwrap();
 
-        assert!(posts.results.iter().count() == 2);
-
-        assert!(posts
-            .results
-            .iter()
-            .any(|post| post.title == post1.bookmark.title
-                && post.url == post1.bookmark.url
-                && post.tag_names.contains(&tag1[0])));
+        assert!(posts.results.iter().count() == 1);
 
         assert!(posts
             .results
